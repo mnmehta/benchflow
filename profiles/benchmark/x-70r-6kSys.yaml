@@ -1,0 +1,12 @@
+# https://github.com/llm-d/llm-d-kv-cache/blob/main/benchmarking/73-capacity/README.md
+apiVersion: benchflow.io/v1alpha1
+kind: BenchmarkProfile
+metadata:
+  name: guidellm-x-70r-6kSys
+spec:
+  guidellm:
+    backend_type: openai_http
+    data: prompt_tokens=1200,output_tokens=1000,prefix_tokens=6000,prefix_count=150                                                                                                                                                                               
+    max_requests: 750
+  env:
+    GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL: "DEBUG"
