@@ -11,7 +11,7 @@ spec:
     cache_dir: /models
     mount_path: /mnt
   runtime:
-    image: registry.redhat.io/rhaiis/vllm-cuda-rhel9:3.3.0
+    image: registry.stage.redhat.io/rhaii/vllm-cuda-rhel9:3.4.0-1776326705
     replicas: 4
     tensor_parallelism: 2
     vllm_args:
