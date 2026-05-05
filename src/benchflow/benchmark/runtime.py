@@ -559,6 +559,7 @@ def run_guidellm_cli(
     request_type: str | None = None,
     profile: str | None = None,
     rate_type: str | None = None,
+    data_samples: int | None = None,
     data: str = None,
     max_seconds=None,
     max_requests=None,
@@ -590,6 +591,8 @@ def run_guidellm_cli(
         cmd.extend(["--profile", profile])
     if rate_type:
         cmd.extend(["--rate-type", rate_type])
+    if data_samples is not None:
+        cmd.extend(["--data-samples", str(data_samples)])
     cmd.extend(["--backend-args", '{"timeout": 600}'])
     if target.startswith("https://"):
         # cmd.extend(["--backend-kwargs", '{"verify": false}'])
@@ -741,6 +744,7 @@ def _run_and_process_benchmark(
     request_type: str | None,
     profile: str | None,
     rate_type: str | None,
+    data_samples: int | None,
     data: str,
     max_seconds,
     max_requests,
@@ -759,6 +763,7 @@ def _run_and_process_benchmark(
         request_type=request_type,
         profile=profile,
         rate_type=rate_type,
+        data_samples=data_samples,
         data=data,
         max_seconds=max_seconds,
         max_requests=max_requests,
@@ -790,6 +795,7 @@ def run_benchmark_without_mlflow(
     request_type: str | None = None,
     profile: str | None = None,
     rate_type: str | None = None,
+    data_samples: int | None = None,
     data: str = None,
     max_seconds=None,
     max_requests=None,
@@ -856,6 +862,7 @@ def run_benchmark_without_mlflow(
                 request_type=request_type,
                 profile=profile,
                 rate_type=rate_type,
+                data_samples=data_samples,
                 data=parsed_data,
                 max_seconds=parsed_max_seconds,
                 max_requests=parsed_max_requests,
@@ -897,6 +904,7 @@ def run_benchmark_without_mlflow(
         request_type=request_type,
         profile=profile,
         rate_type=rate_type,
+        data_samples=data_samples,
         data=data,
         max_seconds=max_seconds,
         max_requests=max_requests,
@@ -923,6 +931,7 @@ def run_benchmark_with_mlflow(
     request_type: str | None = None,
     profile: str | None = None,
     rate_type: str | None = None,
+    data_samples: int | None = None,
     data: str = None,
     max_seconds=None,
     max_requests=None,
@@ -988,6 +997,8 @@ def run_benchmark_with_mlflow(
                 params["request_type"] = request_type
             if profile:
                 params["profile"] = profile
+            if data_samples is not None:
+                params["data_samples"] = data_samples
             if data:
                 params.update(_parse_data_profile_config(data))
             if max_seconds is not None:
@@ -1080,6 +1091,7 @@ def run_benchmark_with_mlflow(
                             request_type=request_type,
                             profile=profile,
                             rate_type=rate_type,
+                            data_samples=data_samples,
                             data=parsed_data,
                             max_seconds=parsed_max_seconds,
                             max_requests=parsed_max_requests,
@@ -1184,6 +1196,7 @@ def run_benchmark_with_mlflow(
                     request_type=request_type,
                     profile=profile,
                     rate_type=rate_type,
+                    data_samples=data_samples,
                     data=data,
                     max_seconds=max_seconds,
                     max_requests=max_requests,
@@ -1868,6 +1881,7 @@ def _run_benchmark_mode(
     model: str,
     backend_type: str,
     rate_type: str | None,
+    data_samples: int | None,
     rate: str | None,
     data: str | None,
     max_seconds: str | None,
@@ -1902,6 +1916,7 @@ def _run_benchmark_mode(
                 rate=rate,
                 backend_type=backend_type,
                 rate_type=rate_type,
+                data_samples=data_samples,
                 data=data,
                 profile=profile,
                 max_seconds=max_seconds,
@@ -1928,6 +1943,7 @@ def _run_benchmark_mode(
             rate=rate,
             backend_type=backend_type,
             rate_type=rate_type,
+            data_samples=data_samples,
             data=data,
             profile=profile,
             max_seconds=max_seconds,
@@ -1975,6 +1991,11 @@ def _run_benchmark_mode(
 @click.option(
     "--rate",
     help="Rate value(s), comma-separated. Required for benchmark mode.",
+)
+@click.option(
+    "--data-samples",
+    type=int,
+    help="Limit the number of data samples used by GuideLLM.",
 )
 @click.option(
     "--data",
@@ -2088,6 +2109,7 @@ def cli(
     model: str | None,
     backend_type: str,
     rate_type: str,
+    data_samples: int | None,
     rate: str | None,
     data: str | None,
     max_seconds: str | None,
@@ -2140,6 +2162,7 @@ def cli(
         model=model,
         backend_type=backend_type,
         rate_type=rate_type,
+        data_samples=data_samples,
         rate=rate,
         data=data,
         max_seconds=max_seconds,

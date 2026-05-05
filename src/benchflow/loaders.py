@@ -146,6 +146,20 @@ def _optional_positive_int(raw: Any, field_name: str) -> int | None:
     return _positive_int(raw, field_name)
 
 
+def _optional_nonnegative_int(raw: Any, field_name: str) -> int | None:
+    if raw is None or str(raw).strip() == "":
+        return None
+    if isinstance(raw, bool):
+        raise ValidationError(f"{field_name} must be a non-negative integer")
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(f"{field_name} must be a non-negative integer") from exc
+    if parsed < 0:
+        raise ValidationError(f"{field_name} must be a non-negative integer")
+    return parsed
+
+
 def _nonempty_string(raw: Any, field_name: str) -> str | None:
     if raw is None:
         return None
@@ -466,6 +480,9 @@ def _guidellm_benchmark_from_dict(raw: dict[str, Any]) -> GuidellmBenchmarkSpec:
         profile=_nonempty_string(raw.get("profile"), "spec.guidellm.profile"),
         rate_type=_nonempty_string(raw.get("rate_type"), "spec.guidellm.rate_type"),
         rates=_int_list(raw.get("rates"), "spec.guidellm.rates"),
+        data_samples=_optional_nonnegative_int(
+            raw.get("data_samples"), "spec.guidellm.data_samples"
+        ),
         data=str(raw.get("data", "prompt_tokens=1000,output_tokens=1000")),
         max_seconds=_optional_positive_int(
             raw.get("max_seconds"), "spec.guidellm.max_seconds"
