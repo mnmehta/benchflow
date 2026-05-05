@@ -1114,6 +1114,10 @@ def cmd_task_remote_capacity_controller(args: argparse.Namespace) -> int:
     "--results-size",
     help="Requested size for the benchmark results PVC.",
 )
+@click.option(
+    "--results-access-mode",
+    help="Access mode for the benchmark results PVC.",
+)
 def bootstrap_command(**kwargs: object) -> int:
     return invoke_handler(cmd_bootstrap, **kwargs)
 

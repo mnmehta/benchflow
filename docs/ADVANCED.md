@@ -169,6 +169,19 @@ bootstrap:
   target-cluster Secret and injects them into management-cluster controller and
   Tekton pods automatically
 
+If your cluster has an RWX-capable `StorageClass` such as NFS, you can make the
+bootstrap PVCs shared by setting both access modes explicitly:
+
+```bash
+bflow bootstrap \
+  --target-kubeconfig ~/.kube/target-cluster \
+  --cluster-name target-cluster \
+  --models-storage-class nfs \
+  --models-access-mode ReadWriteMany \
+  --results-storage-class nfs \
+  --results-access-mode ReadWriteMany
+```
+
 If you are developing BenchFlow itself, pass `--benchflow-image ghcr.io/...`
 to `bflow bootstrap` so the management-cluster remote-capacity controller uses
 the same image tag as your Tekton runs.

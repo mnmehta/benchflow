@@ -22,7 +22,7 @@ metadata:
     benchflow.io/purpose: benchmark-results
 spec:
   accessModes:
-    - ReadWriteOnce
+    - "{{ RESULTS_STORAGE_ACCESS_MODE }}"
   storageClassName: "{{ RESULTS_STORAGE_CLASS }}"
   resources:
     requests:

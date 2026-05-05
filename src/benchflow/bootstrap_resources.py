@@ -52,6 +52,7 @@ def apply_workspace_pvcs(installer: Any) -> None:
         "MODELS_STORAGE_ACCESS_MODE": installer.options.models_storage_access_mode,
         "MODELS_STORAGE_CLASS": installer.options.models_storage_class,
         "MODELS_STORAGE_SIZE": installer.options.models_storage_size,
+        "RESULTS_STORAGE_ACCESS_MODE": installer.options.results_storage_access_mode,
         "RESULTS_STORAGE_CLASS": installer.options.results_storage_class,
         "RESULTS_STORAGE_SIZE": installer.options.results_storage_size,
     }

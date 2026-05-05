@@ -103,6 +103,7 @@ class BootstrapOptions:
     models_storage_class: str | None = None
     results_storage_size: str = "20Gi"
     results_storage_class: str | None = None
+    results_storage_access_mode: str = "ReadWriteOnce"
     cluster_name: str | None = None
 
 
