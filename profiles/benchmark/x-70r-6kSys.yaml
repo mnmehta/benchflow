@@ -6,7 +6,11 @@ metadata:
 spec:
   guidellm:
     backend_type: openai_http
+    profile: poisson
+    rates: [15, 3, 10, 15, 20, 22, 25, 30, 35, 40, 43, 46, 49, 52, 55, 57, 60]
     data: prompt_tokens=1200,output_tokens=1000,prefix_tokens=6000,prefix_count=150                                                                                                                                                                               
-    max_requests: 750
+    data_samples: 750  # 750 samples pool for the whole benchmark
+    max_seconds: 30
+    warmup: '{"value": 30, "mode": "duration"}'  # discard the first 30s worth of metrics
   env:
     GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL: "DEBUG"
