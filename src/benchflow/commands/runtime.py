@@ -284,6 +284,7 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
         models_storage_access_mode=args.models_access_mode or "ReadWriteOnce",
         results_storage_class=args.results_storage_class,
         results_storage_size=args.results_size or "20Gi",
+        results_storage_access_mode=args.results_access_mode or "ReadWriteOnce",
         cluster_name=cluster_name,
     )
     defer_summary = bool(single_cluster or (target_kubeconfig and cluster_name))
