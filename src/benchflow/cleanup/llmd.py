@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 
 from ..cluster import (
@@ -23,6 +24,17 @@ def _gaie_rbac_name(release_name: str) -> str:
     return f"benchflow-gaie-epp-rbac-{suffix}"
 
 
+def _llmd_recipe_layout_from_repo_ref(repo_ref: str) -> bool:
+    normalized = repo_ref.strip().lower()
+    if normalized == "main":
+        return True
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", normalized)
+    if match is None:
+        return False
+    version = tuple(int(part) for part in match.groups())
+    return version >= (0, 6, 0)
+
+
 def cleanup_llmd(
     plan: ResolvedRunPlan,
     *,
@@ -37,13 +49,40 @@ def cleanup_llmd(
     releases = _release_names(plan)
     helm_releases = run_json_command(["helm", "list", "-n", namespace, "-o", "json"])
     existing = {entry.get("name") for entry in helm_releases}
+    recipe_layout = _llmd_recipe_layout_from_repo_ref(plan.deployment.repo_ref)
+    release_label = f"benchflow.io/release={plan.deployment.release_name}"
 
     if not existing.intersection(releases):
-        if skip_if_not_exists:
+        if recipe_layout:
+            probe = run_command(
+                [
+                    kubectl_cmd,
+                    "get",
+                    "gateway,configmap,deployment,service,serviceaccount,podmonitor,httproute",
+                    "-n",
+                    namespace,
+                    "-l",
+                    release_label,
+                    "-o",
+                    "name",
+                ],
+                capture_output=True,
+                check=False,
+            )
+            if probe.returncode == 0 and str(probe.stdout or "").strip():
+                existing = set()
+            elif skip_if_not_exists:
+                return
+            else:
+                raise CommandError(
+                    f"no llm-d releases found for {plan.deployment.release_name}"
+                )
+        elif skip_if_not_exists:
             return
-        raise CommandError(
-            f"no llm-d releases found for {plan.deployment.release_name}"
-        )
+        else:
+            raise CommandError(
+                f"no llm-d releases found for {plan.deployment.release_name}"
+            )
 
     run_command(
         [
@@ -79,6 +118,29 @@ def cleanup_llmd(
             "--ignore-not-found=true",
         ],
     )
+
+    if recipe_layout:
+        for kind in (
+            "gateway",
+            "configmap",
+            "deployment",
+            "service",
+            "serviceaccount",
+            "podmonitor",
+            "httproute",
+        ):
+            run_command(
+                [
+                    kubectl_cmd,
+                    "delete",
+                    kind,
+                    "-n",
+                    namespace,
+                    "-l",
+                    release_label,
+                    "--ignore-not-found=true",
+                ],
+            )
 
     deadline = time.time() + timeout_seconds
     for release_name in releases:

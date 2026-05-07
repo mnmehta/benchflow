@@ -26,6 +26,7 @@ from ..ui import detail, step, success
 
 _LLMD_INFERENCE_SERVING_LABEL = "llm-d.ai/inferenceServing"
 _LLMD_MODEL_LABEL = "llm-d.ai/model"
+_BENCHFLOW_GUIDE_LABEL = "llm-d.ai/guide"
 _BENCHFLOW_RELEASE_LABEL = "benchflow.io/release"
 _BENCHFLOW_EPP_CONFIG_FILE = "benchflow-epp-config.yaml"
 
@@ -45,9 +46,99 @@ def _llmd_guide_layout(plan: ResolvedRunPlan) -> dict[str, str]:
     }
 
 
+def _llmd_recipe_layout_available(checkout_dir: Path) -> bool:
+    return (
+        checkout_dir / "guides" / "recipes" / "scheduler" / "base.values.yaml"
+    ).exists()
+
+
+def _llmd_recipe_layout_from_repo_ref(repo_ref: str) -> bool:
+    normalized = repo_ref.strip().lower()
+    if normalized == "main":
+        return True
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", normalized)
+    if match is None:
+        return False
+    version = tuple(int(part) for part in match.groups())
+    return version >= (0, 6, 0)
+
+
+def _llmd_recipe_guide_name(plan: ResolvedRunPlan) -> str:
+    mode = str(plan.deployment.mode or "").strip()
+    if mode == "precise-prefix-cache":
+        return "precise-prefix-cache-aware"
+    return "optimized-baseline"
+
+
+def _llmd_recipe_scheduler_values_path(
+    checkout_dir: Path, plan: ResolvedRunPlan
+) -> Path:
+    guide_name = _llmd_recipe_guide_name(plan)
+    return (
+        checkout_dir / "guides" / guide_name / "scheduler" / f"{guide_name}.values.yaml"
+    )
+
+
+def _llmd_recipe_modelserver_overlay_dir(
+    checkout_dir: Path, plan: ResolvedRunPlan
+) -> Path:
+    guide_name = _llmd_recipe_guide_name(plan)
+    backend_dir = _llmd_recipe_modelserver_backend_dir(plan)
+    return checkout_dir / "guides" / guide_name / "modelserver" / backend_dir
+
+
+def _llmd_recipe_gateway_dir(checkout_dir: Path) -> Path:
+    return checkout_dir / "guides" / "recipes" / "gateway" / "istio"
+
+
+def _llmd_recipe_scheduler_release_name(plan: ResolvedRunPlan) -> str:
+    return f"gaie-{plan.deployment.release_name}"
+
+
+def _llmd_recipe_modelserver_backend_dir(plan: ResolvedRunPlan) -> str:
+    accelerator = (
+        str(
+            plan.mlflow.tags.get("accelerator")
+            or plan.deployment.options.get("accelerator")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    if not accelerator:
+        return "gpu/vllm"
+    if "AMD" in accelerator or accelerator.startswith("MI"):
+        return "amd/vllm"
+    if "HPU" in accelerator or "GAUDI" in accelerator:
+        return "hpu/vllm"
+    if "XPU" in accelerator or "INTEL" in accelerator:
+        return "xpu/vllm"
+    if "CPU" in accelerator:
+        return "cpu/vllm"
+    if "TPU" in accelerator:
+        if "V6" in accelerator:
+            return "tpu-v6/vllm"
+        return "tpu-v7/vllm"
+    return "gpu/vllm"
+
+
+def _llmd_inference_model_api_group(repo_ref: str) -> str:
+    # Temporary compatibility fix: llm-d v0.4.x still uses the legacy x-k8s
+    # API group, while newer refs route through the promoted
+    # inference.networking.k8s.io group.
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", repo_ref.strip())
+    if match is None:
+        return "inference.networking.k8s.io"
+    version = tuple(int(part) for part in match.groups())
+    if version <= (0, 4, 0):
+        return "inference.networking.x-k8s.io"
+    return "inference.networking.k8s.io"
+
+
 def _release_exists(namespace: str, release_name: str) -> bool:
     helm_json = run_json_command(["helm", "list", "-n", namespace, "-o", "json"])
-    return any(entry.get("name") == f"ms-{release_name}" for entry in helm_json)
+    expected = {f"ms-{release_name}", f"gaie-{release_name}"}
+    return any(entry.get("name") in expected for entry in helm_json)
 
 
 def _gaie_service_account_name(release_name: str) -> str:
@@ -136,6 +227,10 @@ def _release_match_labels(release_name: str) -> dict[str, str]:
     }
 
 
+def _recipe_release_match_labels(release_name: str) -> dict[str, str]:
+    return {_BENCHFLOW_RELEASE_LABEL: release_name}
+
+
 def _llmd_inference_pool_backend_group(repo_ref: str) -> str:
     # Temporary compatibility fix: llm-d v0.4.x inference-scheduling still
     # references the legacy x-k8s InferencePool API group, while newer refs such
@@ -174,6 +269,30 @@ def _split_image_reference(image: str) -> tuple[str, str, str]:
             "in the form <registry>/<path>/<name>:<tag>"
         )
     return hub, name, tag
+
+
+def _image_reference_components(image: str) -> dict[str, str]:
+    trimmed = image.strip()
+    hub, name, tag = _split_image_reference(trimmed)
+    name_part = trimmed.rsplit(":", 1)[0]
+    registry, separator, repository = name_part.partition("/")
+    if not separator:
+        raise CommandError(
+            "scheduler image override must be a fully qualified image reference "
+            "in the form <registry>/<path>/<name>:<tag>"
+        )
+    if not registry or not repository or not tag:
+        raise CommandError(
+            "scheduler image override must be a fully qualified image reference "
+            "in the form <registry>/<path>/<name>:<tag>"
+        )
+    return {
+        "hub": hub,
+        "name": name,
+        "tag": tag,
+        "registry": registry,
+        "repository": repository,
+    }
 
 
 def _patch_values(plan: ResolvedRunPlan, values_file: Path) -> dict[str, Any]:
@@ -372,7 +491,12 @@ def _llmd_epp_verbosity(plan: ResolvedRunPlan) -> int | None:
     return verbosity
 
 
-def _patch_scheduler_values(plan: ResolvedRunPlan, values_file: Path) -> None:
+def _patch_scheduler_values(
+    plan: ResolvedRunPlan,
+    values_file: Path,
+    *,
+    recipe_layout: bool,
+) -> None:
     values = yaml.safe_load(values_file.read_text(encoding="utf-8")) or {}
     inference_extension = values.setdefault("inferenceExtension", {})
     monitoring = inference_extension.setdefault("monitoring", {})
@@ -400,7 +524,10 @@ def _patch_scheduler_values(plan: ResolvedRunPlan, values_file: Path) -> None:
     if not isinstance(match_labels, dict):
         match_labels = {}
         model_servers["matchLabels"] = match_labels
-    match_labels.update(_release_match_labels(plan.deployment.release_name))
+    if recipe_layout:
+        match_labels.update(_recipe_release_match_labels(plan.deployment.release_name))
+    else:
+        match_labels.update(_release_match_labels(plan.deployment.release_name))
 
     epp_verbosity = _llmd_epp_verbosity(plan)
     if epp_verbosity is not None:
@@ -447,11 +574,185 @@ def _patch_scheduler_values(plan: ResolvedRunPlan, values_file: Path) -> None:
 
     if plan.deployment.scheduler_image:
         image = inference_extension.setdefault("image", {})
-        hub, name, tag = _split_image_reference(plan.deployment.scheduler_image)
-        image["hub"] = hub
-        image["name"] = name
-        image["tag"] = tag
+        components = _image_reference_components(plan.deployment.scheduler_image)
+        image.update(
+            {
+                "hub": components["hub"],
+                "name": components["name"],
+                "tag": components["tag"],
+                "registry": components["registry"],
+                "repository": components["repository"],
+            }
+        )
     values_file.write_text(yaml.safe_dump(values, sort_keys=False), encoding="utf-8")
+
+
+def _recipe_modelserver_container(values: dict[str, Any]) -> dict[str, Any]:
+    spec = values.setdefault("spec", {})
+    template = spec.setdefault("template", {})
+    pod_spec = template.setdefault("spec", {})
+    containers = pod_spec.setdefault("containers", [])
+    if not containers:
+        containers.append({"name": "modelserver"})
+    return containers[0]
+
+
+def _patch_recipe_modelserver_overlay(plan: ResolvedRunPlan, overlay_dir: Path) -> None:
+    guide_name = _llmd_recipe_guide_name(plan)
+    kustomization_path = overlay_dir / "kustomization.yaml"
+    patch_path = overlay_dir / "patch-vllm.yaml"
+
+    kustomization = yaml.safe_load(kustomization_path.read_text(encoding="utf-8"))
+    if not isinstance(kustomization, dict):
+        raise CommandError(
+            f"expected llm-d modelserver kustomization not found: {kustomization_path}"
+        )
+    kustomization["namePrefix"] = f"ms-{plan.deployment.release_name}-"
+    images = kustomization.setdefault("images", [])
+    if images:
+        image = images[0]
+        if plan.deployment.runtime.image:
+            hub, name, tag = _split_image_reference(plan.deployment.runtime.image)
+            image["newName"] = f"{hub}/{name}"
+            image["newTag"] = tag
+    labels = kustomization.setdefault("labels", [])
+    if labels:
+        label_entry = labels[0]
+        if isinstance(label_entry, dict):
+            pairs = label_entry.setdefault("pairs", {})
+            if isinstance(pairs, dict):
+                pairs.update(
+                    {
+                        _BENCHFLOW_GUIDE_LABEL: guide_name,
+                        _LLMD_MODEL_LABEL: plan.model.name,
+                        _BENCHFLOW_RELEASE_LABEL: plan.deployment.release_name,
+                    }
+                )
+            fields = label_entry.setdefault("fields", [])
+            if isinstance(fields, list):
+                service_field = {
+                    "version": "v1",
+                    "kind": "Service",
+                    "path": "metadata/labels",
+                    "create": True,
+                }
+                if service_field not in fields:
+                    fields.append(service_field)
+    kustomization_path.write_text(
+        yaml.safe_dump(kustomization, sort_keys=False), encoding="utf-8"
+    )
+
+    patch = yaml.safe_load(patch_path.read_text(encoding="utf-8"))
+    if not isinstance(patch, dict):
+        raise CommandError(f"expected llm-d modelserver patch not found: {patch_path}")
+    container = _recipe_modelserver_container(patch)
+    runtime = plan.deployment.runtime
+    args = [
+        plan.model.name,
+        "--disable-access-log-for-endpoints=/health,/metrics,/v1/models",
+        f"--tensor-parallel-size={runtime.tensor_parallelism}",
+    ]
+    env: list[dict[str, Any]] = []
+    if plan.deployment.mode == "precise-prefix-cache":
+        env.extend(
+            [
+                {
+                    "name": "NAMESPACE",
+                    "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}},
+                },
+                {
+                    "name": "POD_IP",
+                    "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}},
+                },
+                {"name": "POD_PORT", "value": "8000"},
+                {"name": "KV_EVENTS_ENDPOINT", "value": "tcp://*:5556"},
+                {"name": "DO_NOT_TRACK", "value": "1"},
+            ]
+        )
+        args.extend(
+            [
+                "--block-size=64",
+                "--kv-events-config",
+                json.dumps(
+                    {
+                        "enable_kv_cache_events": True,
+                        "publisher": "zmq",
+                        "endpoint": "$(KV_EVENTS_ENDPOINT)",
+                        "topic": (f"kv@$(POD_IP):$(POD_PORT)@{plan.model.name}"),
+                    },
+                    separators=(",", ":"),
+                ),
+            ]
+        )
+
+    managed_env_names = {"CUDA_VISIBLE_DEVICES", *runtime.env.keys()}
+    if plan.deployment.mode == "precise-prefix-cache":
+        managed_env_names.update(
+            {"NAMESPACE", "POD_IP", "POD_PORT", "KV_EVENTS_ENDPOINT", "DO_NOT_TRACK"}
+        )
+    existing_env = [
+        entry
+        for entry in list(container.get("env") or [])
+        if str(entry.get("name") or "") not in managed_env_names
+    ]
+    existing_env.append(
+        {
+            "name": "CUDA_VISIBLE_DEVICES",
+            "value": _cuda_visible_devices(runtime.tensor_parallelism),
+        }
+    )
+    existing_env.extend(
+        {"name": key, "value": value} for key, value in sorted(runtime.env.items())
+    )
+    existing_env.extend(env)
+
+    container["command"] = ["vllm", "serve"]
+    container["args"] = args + list(runtime.vllm_args)
+    container["env"] = existing_env
+    _apply_runtime_resources(container, plan)
+
+    pod_spec = (
+        patch.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {})
+    )
+    if runtime.node_selector:
+        pod_spec["nodeSelector"] = dict(runtime.node_selector)
+    if runtime.affinity:
+        pod_spec["affinity"] = dict(runtime.affinity)
+    if runtime.tolerations:
+        pod_spec["tolerations"] = list(runtime.tolerations)
+    if runtime.image_pull_secrets:
+        pod_spec["imagePullSecrets"] = list(runtime.image_pull_secrets)
+
+    patch_path.write_text(yaml.safe_dump(patch, sort_keys=False), encoding="utf-8")
+
+
+def _patch_recipe_gateway(plan: ResolvedRunPlan, gateway_dir: Path) -> None:
+    gateway_name = f"infra-{plan.deployment.release_name}-inference-gateway"
+    labels = {
+        "app.kubernetes.io/name": "benchflow",
+        "benchflow.io/platform": "llm-d",
+        _BENCHFLOW_RELEASE_LABEL: plan.deployment.release_name,
+    }
+    gateway_path = gateway_dir / "gateway.yaml"
+    configmap_path = gateway_dir / "configmap.yaml"
+    for path in (gateway_path, configmap_path):
+        manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise CommandError(f"expected llm-d gateway manifest not found: {path}")
+        metadata = manifest.setdefault("metadata", {})
+        metadata["name"] = gateway_name
+        manifest_labels = metadata.setdefault("labels", {})
+        if not isinstance(manifest_labels, dict):
+            manifest_labels = {}
+            metadata["labels"] = manifest_labels
+        manifest_labels.update(labels)
+        if manifest.get("kind") == "Gateway":
+            infrastructure = manifest.setdefault("spec", {}).setdefault(
+                "infrastructure", {}
+            )
+            parameters_ref = infrastructure.setdefault("parametersRef", {})
+            parameters_ref["name"] = gateway_name
+        path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
 
 def _apply_pipeline_labels(
@@ -498,6 +799,28 @@ def _capture_manifests(
     if result.returncode == 0 and result.stdout:
         rendered_path.write_text(result.stdout, encoding="utf-8")
     shutil.copy2(values_path, rendered_dir / "values.yaml")
+
+
+def _capture_recipe_inputs(
+    *,
+    scheduler_values_file: Path,
+    gateway_dir: Path,
+    overlay_dir: Path,
+    manifests_dir: Path,
+) -> None:
+    manifests_dir.mkdir(parents=True, exist_ok=True)
+    rendered_dir = manifests_dir / "rendered"
+    rendered_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(scheduler_values_file, rendered_dir / "scheduler.values.yaml")
+    for source_dir, target_name in (
+        (gateway_dir, "gateway"),
+        (overlay_dir, "modelserver"),
+    ):
+        target_dir = rendered_dir / target_name
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for path in source_dir.iterdir():
+            if path.is_file():
+                shutil.copy2(path, target_dir / path.name)
 
 
 def _create_httproute(plan: ResolvedRunPlan, kubectl_cmd: str) -> None:
@@ -551,6 +874,7 @@ def _ensure_gaie_rbac(plan: ResolvedRunPlan, kubectl_cmd: str) -> None:
     release_name = plan.deployment.release_name
     resource_name = _gaie_rbac_name(release_name)
     service_account_name = _gaie_service_account_name(release_name)
+    api_group = _llmd_inference_model_api_group(plan.deployment.repo_ref)
     document = {
         "apiVersion": "rbac.authorization.k8s.io/v1",
         "kind": "Role",
@@ -566,7 +890,7 @@ def _ensure_gaie_rbac(plan: ResolvedRunPlan, kubectl_cmd: str) -> None:
         },
         "rules": [
             {
-                "apiGroups": ["inference.networking.x-k8s.io"],
+                "apiGroups": [api_group],
                 "resources": ["inferencemodelrewrites"],
                 "verbs": ["get", "list", "watch"],
             }
@@ -666,6 +990,7 @@ def _verify_deployment(plan: ResolvedRunPlan, timeout_seconds: int) -> None:
     kubectl_cmd = require_any_command("oc", "kubectl")
     namespace = plan.deployment.namespace
     release_name = plan.deployment.release_name
+    recipe_layout = _llmd_recipe_layout_from_repo_ref(plan.deployment.repo_ref)
     deadline = time.time() + timeout_seconds
     last_snapshot: tuple[int, int, bool, bool] | None = None
 
@@ -677,9 +1002,16 @@ def _verify_deployment(plan: ResolvedRunPlan, timeout_seconds: int) -> None:
         epp_ready, epp_ready_count, epp_total = _pods_ready(
             namespace, f"inferencepool=gaie-{release_name}-epp", kubectl_cmd
         )
+        if recipe_layout:
+            model_selector = f"{_BENCHFLOW_RELEASE_LABEL}={release_name}"
+        else:
+            model_selector = (
+                f"{_LLMD_INFERENCE_SERVING_LABEL}=true,"
+                f"{_LLMD_MODEL_LABEL}={release_name}"
+            )
         ms_ready, ms_ready_count, ms_total = _pods_ready(
             namespace,
-            f"{_LLMD_INFERENCE_SERVING_LABEL}=true,{_LLMD_MODEL_LABEL}={release_name}",
+            model_selector,
             kubectl_cmd,
         )
         gateway_ready = _gateway_exists(namespace, release_name, kubectl_cmd)
@@ -727,7 +1059,8 @@ def deploy_llmd(
     ):
         _ensure_gaie_rbac(plan, kubectl_cmd)
         success(
-            f"Skipping deploy; Helm release ms-{plan.deployment.release_name} already exists"
+            "Skipping deploy; llm-d Helm release already exists for "
+            f"{plan.deployment.release_name}"
         )
         return workspace_dir.resolve() if workspace_dir else Path.cwd()
 
@@ -748,78 +1081,193 @@ def deploy_llmd(
         delete_existing=True,
     )
 
-    guide_layout = _llmd_guide_layout(plan)
-    guide_dir = checkout_dir / "guides" / guide_layout["guide_dirname"]
-    values_file = guide_dir / Path(guide_layout["model_values_relpath"])
-    scheduler_values_file = guide_dir / Path(guide_layout["scheduler_values_relpath"])
-    if not values_file.exists():
-        raise CommandError(f"expected llm-d guide file not found: {values_file}")
-    if not scheduler_values_file.exists():
-        raise CommandError(
-            f"expected llm-d guide file not found: {scheduler_values_file}"
-        )
+    recipe_layout = _llmd_recipe_layout_available(checkout_dir)
+    if recipe_layout:
+        guide_name = _llmd_recipe_guide_name(plan)
+        guide_dir = checkout_dir / "guides" / guide_name
+        scheduler_values_file = _llmd_recipe_scheduler_values_path(checkout_dir, plan)
+        gateway_dir = _llmd_recipe_gateway_dir(checkout_dir)
+        overlay_dir = _llmd_recipe_modelserver_overlay_dir(checkout_dir, plan)
+        if not scheduler_values_file.exists():
+            raise CommandError(
+                f"expected llm-d guide file not found: {scheduler_values_file}"
+            )
+        if not gateway_dir.exists():
+            raise CommandError(
+                f"expected llm-d gateway directory not found: {gateway_dir}"
+            )
+        if not overlay_dir.exists():
+            raise CommandError(
+                f"expected llm-d modelserver overlay not found: {overlay_dir}"
+            )
+        if plan.deployment.mode == "precise-prefix-cache":
+            require_command("kustomize")
 
-    step(f"Patching llm-d guide values for release {plan.deployment.release_name}")
-    detail(f"Guide directory: {guide_dir}")
-    values = _patch_values(plan, values_file)
-    _patch_scheduler_values(plan, scheduler_values_file)
-    _apply_pipeline_labels(
-        values,
-        plan.deployment.release_name,
-        execution_name,
-        execution_backend="tekton",
-    )
-    values_file.write_text(yaml.safe_dump(values, sort_keys=False), encoding="utf-8")
+        step(f"Patching llm-d recipe values for release {plan.deployment.release_name}")
+        detail(f"Guide directory: {guide_dir}")
+        _patch_scheduler_values(plan, scheduler_values_file, recipe_layout=True)
+        _patch_recipe_gateway(plan, gateway_dir)
+        _patch_recipe_modelserver_overlay(plan, overlay_dir)
 
-    env = {
-        **os.environ,
-        "HOME": "/tmp",
-        "HELM_CACHE_HOME": "/tmp/.cache/helm",
-        "HELM_CONFIG_HOME": "/tmp/.config/helm",
-        "HELM_DATA_HOME": "/tmp/.local/share/helm",
-        "HELM_PLUGINS": "/tmp/.local/share/helm/plugins",
-        "RELEASE_NAME_POSTFIX": plan.deployment.release_name,
-        "HELMFILE_ENVIRONMENT": _environment_name(plan),
-    }
-
-    step("Initializing helmfile plugins")
-    run_command(["helmfile", "init", "--force"], cwd=guide_dir, env=env)
-
-    if manifests_dir is not None:
-        step(f"Capturing rendered manifests in {manifests_dir}")
-        _capture_manifests(
-            guide_dir,
-            manifests_dir,
-            plan.deployment.namespace,
-            env,
-            model_values_relpath=guide_layout["model_values_relpath"],
-        )
-
-    step(
-        f"Applying helmfile environment {env['HELMFILE_ENVIRONMENT']} "
-        f"into namespace {plan.deployment.namespace}"
-    )
-    run_command(
-        [
-            "helmfile",
-            "-e",
-            env["HELMFILE_ENVIRONMENT"],
-            "apply",
+        env = {
+            **os.environ,
+            "HOME": "/tmp",
+            "HELM_CACHE_HOME": "/tmp/.cache/helm",
+            "HELM_CONFIG_HOME": "/tmp/.config/helm",
+            "HELM_DATA_HOME": "/tmp/.local/share/helm",
+            "HELM_PLUGINS": "/tmp/.local/share/helm/plugins",
+            "RELEASE_NAME_POSTFIX": plan.deployment.release_name,
+        }
+        helm_args = [
+            "helm",
+            "install",
+            _llmd_recipe_scheduler_release_name(plan),
+            "oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool",
+            "-f",
+            str(checkout_dir / "guides" / "recipes" / "scheduler" / "base.values.yaml"),
+            "-f",
+            str(scheduler_values_file),
+            "--set",
+            "provider.name=istio",
             "-n",
             plan.deployment.namespace,
-            "--skip-deps=false",
-            "--suppress-secrets",
-        ],
-        cwd=guide_dir,
-        env=env,
-    )
-    _ensure_gaie_rbac(plan, kubectl_cmd)
-    step(f"Applying HTTPRoute llm-d-{plan.deployment.release_name}")
-    _create_httproute(plan, kubectl_cmd)
-    success(
-        f"Applied llm-d releases for {plan.deployment.release_name} in namespace "
-        f"{plan.deployment.namespace}"
-    )
+            "--version",
+            "v1.5.0",
+        ]
+        if plan.deployment.mode == "precise-prefix-cache":
+            helm_args.extend(
+                [
+                    "--post-renderer",
+                    str(
+                        checkout_dir
+                        / "guides"
+                        / "precise-prefix-cache-aware"
+                        / "scheduler"
+                        / "patches"
+                        / "uds-tokenizer"
+                        / "post-renderer.sh"
+                    ),
+                ]
+            )
+
+        if manifests_dir is not None:
+            step(f"Capturing rendered manifests in {manifests_dir}")
+            _capture_recipe_inputs(
+                scheduler_values_file=scheduler_values_file,
+                gateway_dir=gateway_dir,
+                overlay_dir=overlay_dir,
+                manifests_dir=manifests_dir,
+            )
+
+        step(
+            f"Installing llm-d recipe scheduler {helm_args[2]} "
+            f"into namespace {plan.deployment.namespace}"
+        )
+        run_command(helm_args, cwd=guide_dir, env=env)
+
+        step(f"Applying llm-d gateway resources from {gateway_dir}")
+        run_command(
+            [
+                kubectl_cmd,
+                "apply",
+                "-n",
+                plan.deployment.namespace,
+                "-k",
+                str(gateway_dir),
+            ]
+        )
+        step(f"Applying llm-d modelserver overlay from {overlay_dir}")
+        run_command(
+            [
+                kubectl_cmd,
+                "apply",
+                "-n",
+                plan.deployment.namespace,
+                "-k",
+                str(overlay_dir),
+            ]
+        )
+        success(
+            f"Applied llm-d recipe resources for {plan.deployment.release_name} "
+            f"in namespace {plan.deployment.namespace}"
+        )
+    else:
+        guide_layout = _llmd_guide_layout(plan)
+        guide_dir = checkout_dir / "guides" / guide_layout["guide_dirname"]
+        values_file = guide_dir / Path(guide_layout["model_values_relpath"])
+        scheduler_values_file = guide_dir / Path(
+            guide_layout["scheduler_values_relpath"]
+        )
+        if not values_file.exists():
+            raise CommandError(f"expected llm-d guide file not found: {values_file}")
+        if not scheduler_values_file.exists():
+            raise CommandError(
+                f"expected llm-d guide file not found: {scheduler_values_file}"
+            )
+
+        step(f"Patching llm-d guide values for release {plan.deployment.release_name}")
+        detail(f"Guide directory: {guide_dir}")
+        values = _patch_values(plan, values_file)
+        _patch_scheduler_values(plan, scheduler_values_file, recipe_layout=False)
+        _apply_pipeline_labels(
+            values,
+            plan.deployment.release_name,
+            execution_name,
+            execution_backend="tekton",
+        )
+        values_file.write_text(
+            yaml.safe_dump(values, sort_keys=False), encoding="utf-8"
+        )
+
+        env = {
+            **os.environ,
+            "HOME": "/tmp",
+            "HELM_CACHE_HOME": "/tmp/.cache/helm",
+            "HELM_CONFIG_HOME": "/tmp/.config/helm",
+            "HELM_DATA_HOME": "/tmp/.local/share/helm",
+            "HELM_PLUGINS": "/tmp/.local/share/helm/plugins",
+            "RELEASE_NAME_POSTFIX": plan.deployment.release_name,
+            "HELMFILE_ENVIRONMENT": _environment_name(plan),
+        }
+
+        step("Initializing helmfile plugins")
+        run_command(["helmfile", "init", "--force"], cwd=guide_dir, env=env)
+
+        if manifests_dir is not None:
+            step(f"Capturing rendered manifests in {manifests_dir}")
+            _capture_manifests(
+                guide_dir,
+                manifests_dir,
+                plan.deployment.namespace,
+                env,
+                model_values_relpath=guide_layout["model_values_relpath"],
+            )
+
+        step(
+            f"Applying helmfile environment {env['HELMFILE_ENVIRONMENT']} "
+            f"into namespace {plan.deployment.namespace}"
+        )
+        run_command(
+            [
+                "helmfile",
+                "-e",
+                env["HELMFILE_ENVIRONMENT"],
+                "apply",
+                "-n",
+                plan.deployment.namespace,
+                "--skip-deps=false",
+                "--suppress-secrets",
+            ],
+            cwd=guide_dir,
+            env=env,
+        )
+        _ensure_gaie_rbac(plan, kubectl_cmd)
+        step(f"Applying HTTPRoute llm-d-{plan.deployment.release_name}")
+        _create_httproute(plan, kubectl_cmd)
+        success(
+            f"Applied llm-d releases for {plan.deployment.release_name} in namespace "
+            f"{plan.deployment.namespace}"
+        )
 
     if verify:
         _verify_deployment(plan, verify_timeout_seconds)
