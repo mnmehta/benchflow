@@ -326,6 +326,13 @@ def summarize_benchmarks(
 ) -> list[dict]:
     rows = []
 
+    def metric_mean(metric_blob: dict, *, default: float = 0.0) -> float:
+        value = metric_blob.get("mean", default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     for benchmark in benchmarks:
         metrics = benchmark["metrics"]
         totals = metrics["request_totals"]
@@ -348,15 +355,19 @@ def summarize_benchmarks(
             requests, duration, *relaxed_slo
         )
 
-        successful_mean_output_tokens = (
-            sum(
-                request["output_tokens"]
-                for request in requests
-                if request["output_tokens"] is not None
-            )
-            / len(requests)
-            if requests
-            else 0.0
+        request_rate_metrics = metrics["requests_per_second"]["successful"]
+        output_rate_metrics = metrics["output_tokens_per_second"]["successful"]
+        total_rate_metrics = metrics["tokens_per_second"]["successful"]
+        prompt_count_metrics = metrics["prompt_token_count"]["successful"]
+
+        measured_rps = metric_mean(request_rate_metrics)
+        output_tok_per_sec = metric_mean(output_rate_metrics)
+        total_tok_per_sec = metric_mean(total_rate_metrics)
+        prompt_tok_mean = metric_mean(prompt_count_metrics)
+        successful_prompt_toksps = prompt_tok_mean * measured_rps
+
+        successful_mean_output_tokens = metric_mean(
+            metrics["output_token_count"]["successful"]
         )
         incomplete_progress = [
             request["output_tokens"] / successful_mean_output_tokens
@@ -385,81 +396,22 @@ def summarize_benchmarks(
                 "errored_rate": totals["errored"] / total_requests
                 if total_requests
                 else 0.0,
-                "raw_success_rps": totals["successful"] / duration if duration else 0.0,
+                "raw_success_rps": measured_rps,
                 "concurrency_per_gpu": concurrency_per_gpu,
-                "raw_success_rps_per_gpu": (
-                    totals["successful"] / duration / gpu_count
-                    if duration and gpu_count
-                    else np.nan
-                ),
-                "successful_prompt_toksps": (
-                    sum(
-                        request["prompt_tokens"]
-                        for request in requests
-                        if request["prompt_tokens"] is not None
-                    )
-                    / duration
-                    if duration
-                    else 0.0
-                ),
+                "raw_success_rps_per_gpu": measured_rps / gpu_count
+                if gpu_count
+                else np.nan,
+                "successful_prompt_toksps": successful_prompt_toksps,
                 "successful_prompt_toksps_per_gpu": (
-                    (
-                        sum(
-                            request["prompt_tokens"]
-                            for request in requests
-                            if request["prompt_tokens"] is not None
-                        )
-                        / duration
-                        / gpu_count
-                    )
-                    if duration and gpu_count
-                    else np.nan
+                    successful_prompt_toksps / gpu_count if gpu_count else np.nan
                 ),
-                "successful_output_toksps": (
-                    sum(
-                        request["output_tokens"]
-                        for request in requests
-                        if request["output_tokens"] is not None
-                    )
-                    / duration
-                    if duration
-                    else 0.0
-                ),
+                "successful_output_toksps": output_tok_per_sec,
                 "successful_output_toksps_per_gpu": (
-                    (
-                        sum(
-                            request["output_tokens"]
-                            for request in requests
-                            if request["output_tokens"] is not None
-                        )
-                        / duration
-                        / gpu_count
-                    )
-                    if duration and gpu_count
-                    else np.nan
+                    output_tok_per_sec / gpu_count if gpu_count else np.nan
                 ),
-                "successful_total_toksps": (
-                    sum(
-                        request["total_tokens"]
-                        for request in requests
-                        if request["total_tokens"] is not None
-                    )
-                    / duration
-                    if duration
-                    else 0.0
-                ),
+                "successful_total_toksps": total_tok_per_sec,
                 "successful_total_toksps_per_gpu": (
-                    (
-                        sum(
-                            request["total_tokens"]
-                            for request in requests
-                            if request["total_tokens"] is not None
-                        )
-                        / duration
-                        / gpu_count
-                    )
-                    if duration and gpu_count
-                    else np.nan
+                    total_tok_per_sec / gpu_count if gpu_count else np.nan
                 ),
                 "incomplete_output_toksps": (
                     sum(
