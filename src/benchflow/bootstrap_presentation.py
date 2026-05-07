@@ -26,7 +26,9 @@ def _results_storage_text(options: Any) -> str:
     suffix = (
         f" via {options.results_storage_class}" if options.results_storage_class else ""
     )
-    return f"{options.results_storage_access_mode} {options.results_storage_size}{suffix}"
+    return (
+        f"{options.results_storage_access_mode} {options.results_storage_size}{suffix}"
+    )
 
 
 def print_bootstrap_intro(
