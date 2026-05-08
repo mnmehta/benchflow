@@ -158,10 +158,18 @@ def _ordered_data_profile_items(data_profile: Dict[str, Any]) -> list[tuple[str,
 def _extract_intended_concurrency(
     benchmark_run: Dict[str, Any], benchmark_index: int
 ) -> Any:
-    """Extract intended concurrency across old and new GuideLLM schemas."""
+    """Extract the sweep axis across old and new GuideLLM schemas."""
     streams_value = _get_nested(benchmark_run, "scheduler", "strategy", "streams")
     if streams_value is not None:
         return streams_value
+
+    strategy_rate = _get_nested(benchmark_run, "config", "strategy", "rate")
+    if isinstance(strategy_rate, list):
+        if benchmark_index < len(strategy_rate):
+            return strategy_rate[benchmark_index]
+        return strategy_rate[0] if strategy_rate else None
+    if strategy_rate is not None:
+        return strategy_rate
 
     profile_args = _get_nested(benchmark_run, "config", "profile") or _get_nested(
         benchmark_run, "args", "profile", default={}
@@ -169,7 +177,19 @@ def _extract_intended_concurrency(
     streams = profile_args.get("streams", [])
     if benchmark_index < len(streams):
         return streams[benchmark_index]
-    return streams[0] if streams else None
+    profile_rate = profile_args.get("rate", [])
+    if benchmark_index < len(profile_rate):
+        return profile_rate[benchmark_index]
+    return profile_rate[0] if profile_rate else None
+
+
+def _benchmark_axis_label(benchmark_run: Dict[str, Any], benchmark_index: int) -> str:
+    """Choose the report x-axis label based on the benchmark sweep shape."""
+    strategy_type = _get_nested(benchmark_run, "config", "strategy", "type_")
+    profile_type = _get_nested(benchmark_run, "config", "profile", "type_")
+    if strategy_type == "poisson" or profile_type == "poisson":
+        return "RPS"
+    return "Concurrency"
 
 
 def _extract_ttft_sample(request_stats: Dict[str, Any]) -> float | None:
@@ -1193,6 +1213,14 @@ class BenchmarkProcessor:
         model_config = self.config["models"][0]
         colors = self.config["styling"]["colors"]
         markers = self.config["styling"]["markers"]
+        source_df = (
+            self.combined_df if self.combined_df is not None else self.new_data_df
+        )
+        if source_df is not None and not source_df.empty:
+            axis_label = _benchmark_axis_label(source_df.iloc[0].to_dict(), 0)
+        else:
+            axis_label = "Concurrency"
+        throughput_title = "Throughput vs RPS" if axis_label == "RPS" else "Throughput"
 
         has_ttft_distribution = (
             self.ttft_distribution_df is not None
@@ -1212,7 +1240,7 @@ class BenchmarkProcessor:
                 [{}, {}, {}],
             ]
             subplot_titles = [
-                "<b>Throughput</b><br><sub>Higher is better</sub>",
+                f"<b>{throughput_title}</b><br><sub>Higher is better</sub>",
                 "<b>Throughput Efficiency by GPU</b><br><sub>Higher is better</sub>",
                 "<b>Token Throughput per GPU vs End-to-End Latency</b><br><sub>Higher throughput, lower latency</sub>",
                 "<b>TTFT Distribution by Concurrency</b><br><sub>Lower is better</sub>",
@@ -1245,7 +1273,7 @@ class BenchmarkProcessor:
                 [{}, {}, {}],
             ]
             subplot_titles = [
-                "<b>Throughput</b><br><sub>Higher is better</sub>",
+                f"<b>{throughput_title}</b><br><sub>Higher is better</sub>",
                 "<b>Throughput Efficiency by GPU</b><br><sub>Higher is better</sub>",
                 "<b>Token Throughput per GPU vs End-to-End Latency</b><br><sub>Higher throughput, lower latency</sub>",
                 "<b>TTFT P1</b><br><sub>Lower is better</sub>",
@@ -1324,39 +1352,39 @@ class BenchmarkProcessor:
 
         if has_ttft_distribution:
             plot_positions = [
-                (1, 1, "output_tok/sec", "Concurrency", "Output tok/s"),
-                (5, 1, "ttft_p1", "Concurrency", "P1 (ms)"),
-                (5, 2, "ttft_median", "Concurrency", "P50 (ms)"),
-                (5, 3, "ttft_p90", "Concurrency", "P90 (ms)"),
-                (6, 1, "ttft_p99", "Concurrency", "P99 (ms)"),
-                (6, 2, "ttft_p99_p50_ratio", "Concurrency", "P99/P50 Ratio"),
-                (7, 1, "tpot_median", "Concurrency", "P50 (ms)"),
-                (7, 2, "tpot_p90", "Concurrency", "P90 (ms)"),
-                (7, 3, "tpot_p99", "Concurrency", "P99 (ms)"),
-                (8, 1, "itl_median", "Concurrency", "P50 (ms)"),
-                (8, 2, "itl_p90", "Concurrency", "P90 (ms)"),
-                (8, 3, "itl_p99", "Concurrency", "P99 (ms)"),
-                (9, 1, "request_latency_median", "Concurrency", "P50 (s)"),
-                (9, 2, "request_latency_p90", "Concurrency", "P90 (s)"),
-                (9, 3, "request_latency_p99", "Concurrency", "P99 (s)"),
+                (1, 1, "output_tok/sec", axis_label, "Output tok/s"),
+                (5, 1, "ttft_p1", axis_label, "P1 (ms)"),
+                (5, 2, "ttft_median", axis_label, "P50 (ms)"),
+                (5, 3, "ttft_p90", axis_label, "P90 (ms)"),
+                (6, 1, "ttft_p99", axis_label, "P99 (ms)"),
+                (6, 2, "ttft_p99_p50_ratio", axis_label, "P99/P50 Ratio"),
+                (7, 1, "tpot_median", axis_label, "P50 (ms)"),
+                (7, 2, "tpot_p90", axis_label, "P90 (ms)"),
+                (7, 3, "tpot_p99", axis_label, "P99 (ms)"),
+                (8, 1, "itl_median", axis_label, "P50 (ms)"),
+                (8, 2, "itl_p90", axis_label, "P90 (ms)"),
+                (8, 3, "itl_p99", axis_label, "P99 (ms)"),
+                (9, 1, "request_latency_median", axis_label, "P50 (s)"),
+                (9, 2, "request_latency_p90", axis_label, "P90 (s)"),
+                (9, 3, "request_latency_p99", axis_label, "P99 (s)"),
             ]
         else:
             plot_positions = [
-                (1, 1, "output_tok/sec", "Concurrency", "Output tok/s"),
-                (4, 1, "ttft_p1", "Concurrency", "P1 (ms)"),
-                (4, 2, "ttft_median", "Concurrency", "P50 (ms)"),
-                (4, 3, "ttft_p90", "Concurrency", "P90 (ms)"),
-                (5, 1, "ttft_p99", "Concurrency", "P99 (ms)"),
-                (5, 2, "ttft_p99_p50_ratio", "Concurrency", "P99/P50 Ratio"),
-                (6, 1, "tpot_median", "Concurrency", "P50 (ms)"),
-                (6, 2, "tpot_p90", "Concurrency", "P90 (ms)"),
-                (6, 3, "tpot_p99", "Concurrency", "P99 (ms)"),
-                (7, 1, "itl_median", "Concurrency", "P50 (ms)"),
-                (7, 2, "itl_p90", "Concurrency", "P90 (ms)"),
-                (7, 3, "itl_p99", "Concurrency", "P99 (ms)"),
-                (8, 1, "request_latency_median", "Concurrency", "P50 (s)"),
-                (8, 2, "request_latency_p90", "Concurrency", "P90 (s)"),
-                (8, 3, "request_latency_p99", "Concurrency", "P99 (s)"),
+                (1, 1, "output_tok/sec", axis_label, "Output tok/s"),
+                (4, 1, "ttft_p1", axis_label, "P1 (ms)"),
+                (4, 2, "ttft_median", axis_label, "P50 (ms)"),
+                (4, 3, "ttft_p90", axis_label, "P90 (ms)"),
+                (5, 1, "ttft_p99", axis_label, "P99 (ms)"),
+                (5, 2, "ttft_p99_p50_ratio", axis_label, "P99/P50 Ratio"),
+                (6, 1, "tpot_median", axis_label, "P50 (ms)"),
+                (6, 2, "tpot_p90", axis_label, "P90 (ms)"),
+                (6, 3, "tpot_p99", axis_label, "P99 (ms)"),
+                (7, 1, "itl_median", axis_label, "P50 (ms)"),
+                (7, 2, "itl_p90", axis_label, "P90 (ms)"),
+                (7, 3, "itl_p99", axis_label, "P99 (ms)"),
+                (8, 1, "request_latency_median", axis_label, "P50 (s)"),
+                (8, 2, "request_latency_p90", axis_label, "P90 (s)"),
+                (8, 3, "request_latency_p99", axis_label, "P99 (s)"),
             ]
 
         # Plot each metric
