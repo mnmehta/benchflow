@@ -322,7 +322,7 @@ def _create_reader_pod(plan: ResolvedRunPlan, *, pod_name: str) -> None:
 
 
 def _wait_for_reader_pod(
-    plan: ResolvedRunPlan, *, pod_name: str, timeout_seconds: int = 120
+    plan: ResolvedRunPlan, *, pod_name: str, timeout_seconds: int = 600
 ) -> None:
     kubectl_cmd = require_any_command("oc", "kubectl")
     deadline = time.time() + timeout_seconds
