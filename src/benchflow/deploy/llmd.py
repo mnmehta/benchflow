@@ -712,6 +712,14 @@ def _patch_recipe_modelserver_overlay(plan: ResolvedRunPlan, overlay_dir: Path) 
     existing_env.extend(
         {"name": key, "value": value} for key, value in sorted(runtime.env.items())
     )
+    existing_env.append(
+        {
+            "name": "HF_TOKEN",
+            "valueFrom": {
+                "secretKeyRef": {"name": "huggingface-token", "key": "HF_TOKEN"}
+            },
+        }
+    )
     existing_env.extend(env)
 
     container["command"] = ["vllm", "serve"]
