@@ -621,10 +621,12 @@ class BenchmarkProcessor:
 
         measured_concurrency = successful_metrics("request_concurrency").get("mean")
         measured_rps = successful_metrics("requests_per_second").get("mean")
-        output_tok_per_sec = successful_metrics("output_tokens_per_second").get(
-            "mean", 0
+        output_tok_per_sec = _get_nested(
+            metrics, "output_tokens_per_second", "total", "mean", default=0
         )
-        total_tok_per_sec = successful_metrics("tokens_per_second").get("mean", 0)
+        total_tok_per_sec = _get_nested(
+            metrics, "tokens_per_second", "total", "mean", default=0
+        )
 
         requests_made = _get_nested(
             benchmark_run, "scheduler_metrics", "requests_made", default={}
