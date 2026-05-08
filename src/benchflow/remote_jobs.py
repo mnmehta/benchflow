@@ -341,7 +341,16 @@ def _wait_for_reader_pod(
                 ]
             )
             phase = str(payload.get("status", {}).get("phase") or "")
-            if phase == "Running":
+            conditions = payload.get("status", {}).get("conditions") or []
+            ready = False
+            if isinstance(conditions, list):
+                for condition in conditions:
+                    if not isinstance(condition, dict):
+                        continue
+                    if condition.get("type") == "Ready":
+                        ready = str(condition.get("status") or "").lower() == "true"
+                        break
+            if phase == "Running" and ready:
                 return
             if phase in {"Failed", "Succeeded"}:
                 raise CommandError(

@@ -11,6 +11,7 @@ from ..models import ResolvedRunPlan, ValidationError
 RHOAI_PROFILER_CONFIGMAP_SUFFIX = "vllm-profiler"
 RHOAI_PROFILER_MOUNT_PATH = "/home/vllm/profiler"
 RHOAI_PROFILER_OUTPUT_DIR = "/tmp/benchflow-profiler"
+RAHIIS_PROGRESS_DEADLINE_SECONDS = 1800
 
 
 def _base_labels(plan: ResolvedRunPlan) -> dict[str, str]:
@@ -335,6 +336,7 @@ def render_rhaiis_raw_vllm_manifests(plan: ResolvedRunPlan) -> list[dict[str, An
             "labels": labels,
         },
         "spec": {
+            "progressDeadlineSeconds": RAHIIS_PROGRESS_DEADLINE_SECONDS,
             "replicas": plan.deployment.runtime.replicas,
             "selector": {"matchLabels": selector_labels},
             "template": {

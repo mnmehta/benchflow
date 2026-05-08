@@ -1390,7 +1390,7 @@ def deploy_group() -> None:
 @click.option(
     "--verify-timeout-seconds",
     type=int,
-    default=900,
+    default=1800,
     show_default=True,
     help="Maximum time to wait for deployment verification.",
 )
@@ -1422,7 +1422,7 @@ def deploy_llmd_command(**kwargs: object) -> int:
 @click.option(
     "--verify-timeout-seconds",
     type=int,
-    default=900,
+    default=1800,
     show_default=True,
     help="Maximum time to wait for deployment verification.",
 )
@@ -2049,7 +2049,7 @@ def task_setup_run_plan_command(**kwargs: object) -> int:
 @click.option(
     "--verify-timeout-seconds",
     type=int,
-    default=900,
+    default=1800,
     show_default=True,
     help="Maximum time to wait for deployment verification.",
 )

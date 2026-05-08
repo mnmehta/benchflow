@@ -67,7 +67,7 @@ def deploy_rhaiis(
     manifests_dir: Path | None = None,
     skip_if_exists: bool = True,
     verify: bool = True,
-    verify_timeout_seconds: int = 900,
+    verify_timeout_seconds: int = 1800,
 ) -> Path:
     _ensure_supported_mode(plan)
 

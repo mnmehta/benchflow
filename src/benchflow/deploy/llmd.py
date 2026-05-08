@@ -1048,7 +1048,7 @@ def deploy_llmd(
     execution_name: str = "",
     skip_if_exists: bool = True,
     verify: bool = True,
-    verify_timeout_seconds: int = 900,
+    verify_timeout_seconds: int = 1800,
 ) -> Path:
     require_command("helm")
     require_command("helmfile")
