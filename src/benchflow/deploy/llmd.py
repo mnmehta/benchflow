@@ -651,8 +651,10 @@ def _patch_recipe_modelserver_overlay(plan: ResolvedRunPlan, overlay_dir: Path) 
     patch = yaml.safe_load(patch_path.read_text(encoding="utf-8"))
     if not isinstance(patch, dict):
         raise CommandError(f"expected llm-d modelserver patch not found: {patch_path}")
-    container = _recipe_modelserver_container(patch)
     runtime = plan.deployment.runtime
+    spec = patch.setdefault("spec", {})
+    spec["replicas"] = runtime.replicas
+    container = _recipe_modelserver_container(patch)
     args = [
         plan.model.name,
         "--disable-access-log-for-endpoints=/health,/metrics,/v1/models",
