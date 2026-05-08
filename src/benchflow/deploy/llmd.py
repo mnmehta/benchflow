@@ -20,7 +20,7 @@ from ..cluster import (
     run_command,
     run_json_command,
 )
-from ..models import ResolvedRunPlan
+from ..models import ResolvedRunPlan, sanitize_name
 from ..repository import clone_repo
 from ..ui import detail, step, success
 
@@ -120,6 +120,12 @@ def _llmd_recipe_modelserver_backend_dir(plan: ResolvedRunPlan) -> str:
             return "tpu-v6/vllm"
         return "tpu-v7/vllm"
     return "gpu/vllm"
+
+
+def _llmd_model_label_value(plan: ResolvedRunPlan) -> str:
+    # Kubernetes label values must be DNS-like and cannot contain the raw model
+    # identifier when it includes characters such as "/".
+    return sanitize_name(plan.model.resolved_name(), max_length=63)
 
 
 def _llmd_inference_model_api_group(repo_ref: str) -> str:
@@ -624,7 +630,7 @@ def _patch_recipe_modelserver_overlay(plan: ResolvedRunPlan, overlay_dir: Path) 
                 pairs.update(
                     {
                         _BENCHFLOW_GUIDE_LABEL: guide_name,
-                        _LLMD_MODEL_LABEL: plan.model.name,
+                        _LLMD_MODEL_LABEL: _llmd_model_label_value(plan),
                         _BENCHFLOW_RELEASE_LABEL: plan.deployment.release_name,
                     }
                 )
