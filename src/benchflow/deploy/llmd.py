@@ -84,6 +84,29 @@ def _llmd_recipe_modelserver_overlay_dir(
 ) -> Path:
     guide_name = _llmd_recipe_guide_name(plan)
     backend_dir = _llmd_recipe_modelserver_backend_dir(plan)
+    provider = (
+        str(plan.deployment.options.get("infra_provider") or "base").strip().lower()
+    )
+    if backend_dir.startswith("gpu/"):
+        if provider == "gke":
+            return (
+                checkout_dir
+                / "guides"
+                / guide_name
+                / "modelserver"
+                / "gpu"
+                / backend_dir.split("/", 1)[1]
+                / "gke"
+            )
+        return (
+            checkout_dir
+            / "guides"
+            / guide_name
+            / "modelserver"
+            / "gpu"
+            / backend_dir.split("/", 1)[1]
+            / "base"
+        )
     return checkout_dir / "guides" / guide_name / "modelserver" / backend_dir
 
 
