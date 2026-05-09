@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from ..accelerator import discover_plan_accelerator
-from ..cluster import CommandError
+from ..cluster import CommandError, require_any_command
 from ..models import ResolvedRunPlan
+from ..platform_state import load_cluster_platform_state
 from ..setup.rhoai import (
     discover_rhoai_mlflow_version,
     normalize_rhoai_platform_version,
@@ -30,7 +31,21 @@ def benchmark_version_from_plan(plan: ResolvedRunPlan) -> str:
     if explicit_version:
         return explicit_version
     if plan.deployment.platform == "llm-d":
-        return f"llm-d-{plan.deployment.repo_ref}"
+        repo_ref = str(plan.deployment.repo_ref or "").strip()
+        if repo_ref == "main":
+            try:
+                kubectl_cmd = require_any_command("oc", "kubectl")
+                cluster_state = load_cluster_platform_state(
+                    kubectl_cmd, plan.deployment.namespace
+                )
+                setup_state = dict(cluster_state.get("setup_state") or {})
+                repo_head = str(setup_state.get("repo_head") or "").strip()
+                if repo_head:
+                    return f"llm-d-main-{repo_head[:7]}"
+            except CommandError:
+                pass
+            return "llm-d-main"
+        return f"llm-d-{repo_ref}"
     if plan.deployment.platform == "rhoai":
         kubeconfig = str(plan.target_cluster.kubeconfig or "").strip() or None
         try:

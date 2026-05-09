@@ -31,6 +31,7 @@ def _empty_state(plan: ResolvedRunPlan) -> dict[str, Any]:
         "gateway": plan.deployment.gateway,
         "repo_url": plan.deployment.repo_url,
         "repo_ref": plan.deployment.repo_ref,
+        "repo_head": "",
         "namespace": plan.deployment.namespace,
         "gateway_dependencies_managed": False,
         "istio_releases_managed": False,
@@ -61,7 +62,7 @@ def _clone_llmd_repo_source(
     repo_url: str,
     repo_ref: str,
     workspace_dir: Path | None,
-) -> tuple[Path, bool]:
+) -> tuple[Path, bool, str]:
     created_tempdir = workspace_dir is None
     checkout_root = (
         workspace_dir
@@ -76,12 +77,15 @@ def _clone_llmd_repo_source(
         output_dir=checkout_dir,
         delete_existing=True,
     )
-    return checkout_dir, created_tempdir
+    head = run_command(
+        ["git", "rev-parse", "HEAD"], cwd=checkout_dir, capture_output=True
+    ).stdout.strip()
+    return checkout_dir, created_tempdir, head
 
 
 def _clone_llmd_repo(
     plan: ResolvedRunPlan, workspace_dir: Path | None
-) -> tuple[Path, bool]:
+) -> tuple[Path, bool, str]:
     return _clone_llmd_repo_source(
         repo_url=plan.deployment.repo_url,
         repo_ref=plan.deployment.repo_ref,
@@ -403,7 +407,7 @@ def setup_llmd(
     state = _empty_state(plan)
     _persist_state(state, state_path)
 
-    checkout_dir, created_tempdir = _clone_llmd_repo(plan, workspace_dir)
+    checkout_dir, created_tempdir, repo_head = _clone_llmd_repo(plan, workspace_dir)
     try:
         gateway_provider_dir = _gateway_provider_dir(checkout_dir)
         if not gateway_provider_dir.exists():
@@ -411,6 +415,8 @@ def setup_llmd(
                 f"expected llm-d gateway-provider directory not found: {gateway_provider_dir}"
             )
         detail(f"Gateway provider directory: {gateway_provider_dir}")
+        state["repo_head"] = repo_head
+        _persist_state(state, state_path)
 
         gateway_dependencies_present_before = _gateway_dependencies_present(
             kubectl_cmd, plan.deployment.repo_ref
