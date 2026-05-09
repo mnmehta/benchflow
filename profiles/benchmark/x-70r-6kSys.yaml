@@ -12,7 +12,7 @@ spec:
     data_samples: 750  # 750 samples pool for the whole benchmark
     max_seconds: 30
     pre_warmup:
-      rate: 15
-      max_seconds: 30  # populate common-prefix KV cache before the measured sweep
+      rate: 10
+      max_seconds: 60  # populate common-prefix KV cache before the measured sweep
   env:
     GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL: "DEBUG"
