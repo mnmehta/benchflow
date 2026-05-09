@@ -22,6 +22,7 @@ from ..setup import (
     normalize_rhoai_platform_version,
     reset_llmd_platform,
     reset_rhoai_platform,
+    resolve_llmd_repo_head,
     rhoai_platform_present,
     setup_llmd,
     setup_rhoai,
@@ -99,6 +100,45 @@ def _reset_platform_for_state(
         reset_rhoai_platform()
 
 
+def _ensure_llmd_main_repo_head(
+    plan: ResolvedRunPlan,
+    kubectl_cmd: str,
+    installed_key: str,
+    setup_state: dict[str, Any],
+    *,
+    workspace_dir: Path | None = None,
+) -> dict[str, Any]:
+    if plan.deployment.platform != "llm-d":
+        return setup_state
+    if str(plan.deployment.repo_ref or "").strip() != "main":
+        return setup_state
+    if str(setup_state.get("repo_head") or "").strip():
+        return setup_state
+
+    repo_head = resolve_llmd_repo_head(
+        repo_url=plan.deployment.repo_url,
+        repo_ref=plan.deployment.repo_ref,
+        workspace_dir=workspace_dir,
+    )
+    setup_state = {
+        **setup_state,
+        "platform": "llm-d",
+        "repo_url": plan.deployment.repo_url,
+        "repo_ref": plan.deployment.repo_ref,
+        "repo_head": repo_head,
+        "gateway": plan.deployment.gateway,
+    }
+    persist_cluster_platform_state(
+        kubectl_cmd,
+        plan.deployment.namespace,
+        {
+            "installed_key": installed_key,
+            "setup_state": setup_state,
+        },
+    )
+    return setup_state
+
+
 def resolve_target_url(
     plan: ResolvedRunPlan,
     *,
@@ -159,6 +199,13 @@ def setup_platform(
                             )
 
                 if installed_key == requested_key and installed_setup_state:
+                    installed_setup_state = _ensure_llmd_main_repo_head(
+                        plan,
+                        kubectl_cmd,
+                        installed_key,
+                        installed_setup_state,
+                        workspace_dir=workspace_dir,
+                    )
                     detail(
                         f"Platform prerequisites already match setup key {requested_key}"
                     )

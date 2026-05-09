@@ -93,6 +93,24 @@ def _clone_llmd_repo(
     )
 
 
+def resolve_llmd_repo_head(
+    *,
+    repo_url: str,
+    repo_ref: str,
+    workspace_dir: Path | None = None,
+) -> str:
+    checkout_dir, created_tempdir, repo_head = _clone_llmd_repo_source(
+        repo_url=repo_url,
+        repo_ref=repo_ref,
+        workspace_dir=workspace_dir,
+    )
+    try:
+        return repo_head
+    finally:
+        if created_tempdir:
+            shutil.rmtree(checkout_dir.parent, ignore_errors=True)
+
+
 def _resource_manifest(
     kubectl_cmd: str, kind: str, name: str, namespace: str
 ) -> dict[str, Any] | None:

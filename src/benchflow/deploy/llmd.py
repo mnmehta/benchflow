@@ -21,6 +21,11 @@ from ..cluster import (
     run_json_command,
 )
 from ..models import ResolvedRunPlan, sanitize_name
+from ..platform_state import (
+    load_cluster_platform_state,
+    persist_cluster_platform_state,
+    setup_key_for_plan,
+)
 from ..repository import clone_repo
 from ..ui import detail, step, success
 
@@ -61,6 +66,38 @@ def _llmd_recipe_layout_from_repo_ref(repo_ref: str) -> bool:
         return False
     version = tuple(int(part) for part in match.groups())
     return version >= (0, 6, 0)
+
+
+def _record_llmd_repo_head(
+    plan: ResolvedRunPlan, kubectl_cmd: str, repo_head: str
+) -> None:
+    if str(plan.deployment.repo_ref or "").strip() != "main":
+        return
+    if not repo_head:
+        return
+
+    cluster_state = load_cluster_platform_state(kubectl_cmd, plan.deployment.namespace)
+    setup_state = dict(cluster_state.get("setup_state") or {})
+    if setup_state and setup_state.get("platform") not in {"llm-d", None}:
+        return
+
+    setup_state = {
+        **setup_state,
+        "platform": "llm-d",
+        "repo_url": plan.deployment.repo_url,
+        "repo_ref": plan.deployment.repo_ref,
+        "repo_head": repo_head,
+        "gateway": plan.deployment.gateway,
+    }
+    persist_cluster_platform_state(
+        kubectl_cmd,
+        plan.deployment.namespace,
+        {
+            "installed_key": str(cluster_state.get("installed_key") or "").strip()
+            or setup_key_for_plan(plan),
+            "setup_state": setup_state,
+        },
+    )
 
 
 def _llmd_recipe_guide_name(plan: ResolvedRunPlan) -> str:
@@ -1163,12 +1200,13 @@ def deploy_llmd(
     step(
         f"Cloning llm-d guide from {plan.deployment.repo_url} at {plan.deployment.repo_ref}"
     )
-    clone_repo(
+    repo_head = clone_repo(
         url=plan.deployment.repo_url,
         revision=plan.deployment.repo_ref,
         output_dir=checkout_dir,
         delete_existing=True,
     )
+    _record_llmd_repo_head(plan, kubectl_cmd, repo_head)
 
     recipe_layout = _llmd_recipe_layout_available(checkout_dir)
     if recipe_layout:

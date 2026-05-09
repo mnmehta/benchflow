@@ -2,6 +2,7 @@ from .llmd import (
     llmd_platform_present,
     load_setup_state,
     reset_llmd_platform,
+    resolve_llmd_repo_head,
     setup_llmd,
     teardown_llmd,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "normalize_rhoai_platform_version",
     "reset_llmd_platform",
     "reset_rhoai_platform",
+    "resolve_llmd_repo_head",
     "rhoai_platform_present",
     "setup_llmd",
     "teardown_llmd",
