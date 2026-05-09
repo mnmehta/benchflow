@@ -607,6 +607,7 @@ def _patch_recipe_modelserver_overlay(plan: ResolvedRunPlan, overlay_dir: Path) 
     guide_name = _llmd_recipe_guide_name(plan)
     kustomization_path = overlay_dir / "kustomization.yaml"
     patch_path = overlay_dir / "patch-vllm.yaml"
+    storage = plan.deployment.model_storage
 
     kustomization = yaml.safe_load(kustomization_path.read_text(encoding="utf-8"))
     if not isinstance(kustomization, dict):
@@ -656,7 +657,7 @@ def _patch_recipe_modelserver_overlay(plan: ResolvedRunPlan, overlay_dir: Path) 
     spec["replicas"] = runtime.replicas
     container = _recipe_modelserver_container(patch)
     args = [
-        plan.model.name,
+        _model_mount_path(plan),
         "--disable-access-log-for-endpoints=/health,/metrics,/v1/models",
         f"--tensor-parallel-size={runtime.tensor_parallelism}",
     ]
@@ -726,6 +727,33 @@ def _patch_recipe_modelserver_overlay(plan: ResolvedRunPlan, overlay_dir: Path) 
     container["args"] = args + list(runtime.vllm_args)
     container["env"] = existing_env
     _apply_runtime_resources(container, plan)
+
+    volume_mounts = container.setdefault("volumeMounts", [])
+    if not any(
+        str(volume_mount.get("name") or "") == "models-storage"
+        for volume_mount in volume_mounts
+    ):
+        volume_mounts.append(
+            {
+                "name": "models-storage",
+                "mountPath": storage.mount_path,
+                "readOnly": True,
+            }
+        )
+
+    volumes = (
+        patch.setdefault("spec", {})
+        .setdefault("template", {})
+        .setdefault("spec", {})
+        .setdefault("volumes", [])
+    )
+    if not any(str(volume.get("name") or "") == "models-storage" for volume in volumes):
+        volumes.append(
+            {
+                "name": "models-storage",
+                "persistentVolumeClaim": {"claimName": storage.pvc_name},
+            }
+        )
 
     pod_spec = (
         patch.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {})
