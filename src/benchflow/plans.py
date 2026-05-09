@@ -102,10 +102,13 @@ def _target_for(
     if platform == "llm-d":
         if gateway == "standalone":
             base_url = f"http://ms-{release_name}.{namespace}.svc.cluster.local:8000"
-        elif gateway == "kgateway":
-            base_url = f"http://infra-{release_name}-inference-gateway.{namespace}.svc.cluster.local:80"
         else:
-            base_url = f"http://infra-{release_name}-inference-gateway-istio.{namespace}.svc.cluster.local:80"
+            return TargetSpec(
+                discovery="gateway-status-url",
+                resource_kind="Gateway",
+                resource_name=f"infra-{release_name}-inference-gateway",
+                path=path,
+            )
         return TargetSpec(discovery="static", base_url=base_url, path=path)
 
     if platform == "rhoai":

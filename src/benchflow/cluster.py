@@ -134,6 +134,40 @@ def resolve_target_base_url(target: Any, namespace: str) -> str:
             )
         return str(target.base_url).rstrip("/")
 
+    if target.discovery == "gateway-status-url":
+        kubectl_cmd = require_any_command("oc", "kubectl")
+        resource_name = str(target.resource_name or "").strip()
+        if not resource_name:
+            raise CommandError(
+                "target discovery is gateway-status-url but target.resource_name is empty"
+            )
+        payload = run_json_command(
+            [
+                kubectl_cmd,
+                "get",
+                "gateway",
+                resource_name,
+                "-n",
+                namespace,
+                "-o",
+                "json",
+            ]
+        )
+        addresses = payload.get("status", {}).get("addresses") or []
+        if not isinstance(addresses, list) or not addresses:
+            raise CommandError(
+                f"Gateway {resource_name} in namespace {namespace} does not have status.addresses yet"
+            )
+        address = addresses[0] if isinstance(addresses[0], dict) else {}
+        value = str(address.get("value") or address.get("hostname") or "").strip()
+        if not value:
+            raise CommandError(
+                f"Gateway {resource_name} in namespace {namespace} does not have a usable status address yet"
+            )
+        if value.startswith(("http://", "https://")):
+            return value.rstrip("/")
+        return f"http://{value}".rstrip("/")
+
     if target.discovery == "llminferenceservice-status-url":
         kubectl_cmd = require_any_command("oc", "kubectl")
         resource_name = str(target.resource_name or "").strip()
