@@ -57,17 +57,6 @@ def _llmd_recipe_layout_available(checkout_dir: Path) -> bool:
     ).exists()
 
 
-def _llmd_recipe_layout_from_repo_ref(repo_ref: str) -> bool:
-    normalized = repo_ref.strip().lower()
-    if normalized == "main":
-        return True
-    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", normalized)
-    if match is None:
-        return False
-    version = tuple(int(part) for part in match.groups())
-    return version >= (0, 6, 0)
-
-
 def _record_llmd_repo_head(
     plan: ResolvedRunPlan, kubectl_cmd: str, repo_head: str
 ) -> None:
@@ -920,7 +909,7 @@ def _capture_manifests(
 def _capture_recipe_inputs(
     *,
     scheduler_values_file: Path,
-    gateway_dir: Path,
+    gateway_dir: Path | None,
     overlay_dir: Path,
     manifests_dir: Path,
 ) -> None:
@@ -928,10 +917,10 @@ def _capture_recipe_inputs(
     rendered_dir = manifests_dir / "rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(scheduler_values_file, rendered_dir / "scheduler.values.yaml")
-    for source_dir, target_name in (
-        (gateway_dir, "gateway"),
-        (overlay_dir, "modelserver"),
-    ):
+    source_dirs = [(overlay_dir, "modelserver")]
+    if gateway_dir is not None:
+        source_dirs.insert(0, (gateway_dir, "gateway"))
+    for source_dir, target_name in source_dirs:
         target_dir = rendered_dir / target_name
         target_dir.mkdir(parents=True, exist_ok=True)
         for path in source_dir.iterdir():
@@ -1121,6 +1110,8 @@ def _verify_deployment(
     kubectl_cmd = require_any_command("oc", "kubectl")
     namespace = plan.deployment.namespace
     release_name = plan.deployment.release_name
+    gateway_mode = str(plan.deployment.gateway or "").strip()
+    standalone = recipe_layout and gateway_mode == "standalone"
     deadline = time.time() + timeout_seconds
     last_snapshot: tuple[int, int, bool, bool] | None = None
 
@@ -1147,10 +1138,10 @@ def _verify_deployment(
             model_selector,
             kubectl_cmd,
         )
-        gateway_ready = _gateway_exists(
+        gateway_ready = standalone or _gateway_exists(
             namespace, release_name, kubectl_cmd, recipe_layout=recipe_layout
         )
-        httproute_ready = _httproute_exists(
+        httproute_ready = standalone or _httproute_exists(
             namespace, release_name, kubectl_cmd, recipe_layout=recipe_layout
         )
         snapshot = (
@@ -1161,13 +1152,21 @@ def _verify_deployment(
         )
 
         if snapshot != last_snapshot:
-            httproute_text = f"httproute present: {'yes' if httproute_ready else 'no'}"
-            detail(
-                f"EPP pods ready: {epp_ready_count}/{epp_total}, "
-                f"model-service pods ready: {ms_ready_count}/{ms_total}, "
-                f"gateway present: {'yes' if gateway_ready else 'no'}, "
-                f"{httproute_text}"
-            )
+            if standalone:
+                detail(
+                    f"EPP pods ready: {epp_ready_count}/{epp_total}, "
+                    f"model-service pods ready: {ms_ready_count}/{ms_total}"
+                )
+            else:
+                httproute_text = (
+                    f"httproute present: {'yes' if httproute_ready else 'no'}"
+                )
+                detail(
+                    f"EPP pods ready: {epp_ready_count}/{epp_total}, "
+                    f"model-service pods ready: {ms_ready_count}/{ms_total}, "
+                    f"gateway present: {'yes' if gateway_ready else 'no'}, "
+                    f"{httproute_text}"
+                )
             last_snapshot = snapshot
 
         if epp_ready and ms_ready and gateway_ready and httproute_ready:
@@ -1194,7 +1193,6 @@ def deploy_llmd(
     verify_timeout_seconds: int = 1800,
 ) -> Path:
     require_command("helm")
-    require_command("helmfile")
     kubectl_cmd = require_any_command("oc", "kubectl")
 
     if skip_if_exists and _release_exists(
@@ -1227,16 +1225,26 @@ def deploy_llmd(
 
     recipe_layout = _llmd_recipe_layout_available(checkout_dir)
     if recipe_layout:
+        gateway_mode = str(plan.deployment.gateway or "").strip()
+        if gateway_mode not in {"istio", "standalone"}:
+            raise CommandError(
+                "llm-d recipe layout currently supports gateway=istio or "
+                f"gateway=standalone, got {plan.deployment.gateway}"
+            )
         guide_name = _llmd_recipe_guide_name(plan)
         guide_dir = checkout_dir / "guides" / guide_name
         scheduler_values_file = _llmd_recipe_scheduler_values_path(checkout_dir, plan)
-        gateway_dir = _llmd_recipe_gateway_dir(checkout_dir)
+        gateway_dir = (
+            None
+            if gateway_mode == "standalone"
+            else _llmd_recipe_gateway_dir(checkout_dir)
+        )
         overlay_dir = _llmd_recipe_modelserver_overlay_dir(checkout_dir, plan)
         if not scheduler_values_file.exists():
             raise CommandError(
                 f"expected llm-d guide file not found: {scheduler_values_file}"
             )
-        if not gateway_dir.exists():
+        if gateway_dir is not None and not gateway_dir.exists():
             raise CommandError(
                 f"expected llm-d gateway directory not found: {gateway_dir}"
             )
@@ -1250,7 +1258,8 @@ def deploy_llmd(
         step(f"Patching llm-d recipe values for release {plan.deployment.release_name}")
         detail(f"Guide directory: {guide_dir}")
         _patch_scheduler_values(plan, scheduler_values_file, recipe_layout=True)
-        _patch_recipe_gateway(plan, gateway_dir)
+        if gateway_dir is not None:
+            _patch_recipe_gateway(plan, gateway_dir)
         _patch_recipe_modelserver_overlay(plan, overlay_dir)
 
         env = {
@@ -1262,31 +1271,50 @@ def deploy_llmd(
             "HELM_PLUGINS": "/tmp/.local/share/helm/plugins",
             "RELEASE_NAME_POSTFIX": plan.deployment.release_name,
         }
+        chart_name = "standalone" if gateway_mode == "standalone" else "inferencepool"
         helm_args = [
             "helm",
             "install",
             _llmd_recipe_scheduler_release_name(plan),
-            "oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool",
+            "oci://registry.k8s.io/gateway-api-inference-extension/charts/"
+            f"{chart_name}",
             "-f",
             str(checkout_dir / "guides" / "recipes" / "scheduler" / "base.values.yaml"),
             "-f",
             str(scheduler_values_file),
-            "-f",
-            str(
-                checkout_dir
-                / "guides"
-                / "recipes"
-                / "scheduler"
-                / "features"
-                / "httproute-flags.yaml"
-            ),
-            "--set",
-            "provider.name=istio",
             "-n",
             plan.deployment.namespace,
             "--version",
             "v1.5.0",
         ]
+        if gateway_mode != "standalone":
+            helm_args.extend(
+                [
+                    "-f",
+                    str(
+                        checkout_dir
+                        / "guides"
+                        / "recipes"
+                        / "scheduler"
+                        / "features"
+                        / "httproute-flags.yaml"
+                    ),
+                    "--set",
+                    "provider.name=istio",
+                    "--set",
+                    "experimentalHttpRoute.enabled=true",
+                    "--set",
+                    "experimentalHttpRoute.inferenceGatewayName=llm-d-inference-gateway",
+                ]
+            )
+        else:
+            helm_args.extend(
+                [
+                    "--set",
+                    "inferenceExtension.sidecar.configMap.name="
+                    f"gaie-{plan.deployment.release_name}-envoy",
+                ]
+            )
         if plan.deployment.mode == "precise-prefix-cache":
             helm_args.extend(
                 [
@@ -1318,17 +1346,18 @@ def deploy_llmd(
         )
         run_command(helm_args, cwd=guide_dir, env=env)
 
-        step(f"Applying llm-d gateway resources from {gateway_dir}")
-        run_command(
-            [
-                kubectl_cmd,
-                "apply",
-                "-n",
-                plan.deployment.namespace,
-                "-k",
-                str(gateway_dir),
-            ]
-        )
+        if gateway_dir is not None:
+            step(f"Applying llm-d gateway resources from {gateway_dir}")
+            run_command(
+                [
+                    kubectl_cmd,
+                    "apply",
+                    "-n",
+                    plan.deployment.namespace,
+                    "-k",
+                    str(gateway_dir),
+                ]
+            )
         step(f"Applying llm-d modelserver overlay from {overlay_dir}")
         run_command(
             [
@@ -1357,6 +1386,7 @@ def deploy_llmd(
             raise CommandError(
                 f"expected llm-d guide file not found: {scheduler_values_file}"
             )
+        require_command("helmfile")
 
         step(f"Patching llm-d guide values for release {plan.deployment.release_name}")
         detail(f"Guide directory: {guide_dir}")
