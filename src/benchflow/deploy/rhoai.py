@@ -13,6 +13,8 @@ from ..renderers.deployment import (
 )
 from ..ui import detail, step, success
 
+_PUBLIC_ROUTE_AUTH_TIMEOUT_SECONDS = 900
+
 
 def _deployment_resource(plan: ResolvedRunPlan) -> str:
     return "llminferenceservice"
@@ -120,6 +122,7 @@ def _verify_public_route_auth(plan: ResolvedRunPlan, timeout_seconds: int) -> No
         f"Waiting for RHOAI route AuthPolicy {authpolicy_name} "
         f"in namespace {namespace} to allow anonymous access"
     )
+    detail(f"Timeout: {timeout_seconds}s")
 
     while time.time() < deadline:
         result = run_command(
@@ -217,7 +220,10 @@ def _verify_deployment(plan: ResolvedRunPlan, timeout_seconds: int) -> None:
             success(f"RHOAI deployment {release_name} is ready and published at {url}")
             if _auth_disabled(plan):
                 _verify_public_route_auth(
-                    plan, timeout_seconds=min(timeout_seconds, 300)
+                    plan,
+                    timeout_seconds=min(
+                        timeout_seconds, _PUBLIC_ROUTE_AUTH_TIMEOUT_SECONDS
+                    ),
                 )
             return
         time.sleep(10)
