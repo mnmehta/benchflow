@@ -34,6 +34,10 @@ _LLMD_MODEL_LABEL = "llm-d.ai/model"
 _BENCHFLOW_GUIDE_LABEL = "llm-d.ai/guide"
 _BENCHFLOW_RELEASE_LABEL = "benchflow.io/release"
 _BENCHFLOW_EPP_CONFIG_FILE = "benchflow-epp-config.yaml"
+_STANDALONE_ENVOY_CONTAINER = "envoy-sidecar"
+_STANDALONE_ENVOY_LOG_LEVEL = "info"
+_STANDALONE_ENVOY_READINESS_TIMEOUT_SECONDS = 5
+_STANDALONE_ENVOY_READINESS_FAILURE_THRESHOLD = 3
 
 
 def _llmd_guide_layout(plan: ResolvedRunPlan) -> dict[str, str]:
@@ -1043,15 +1047,106 @@ def _ensure_gaie_rbac(plan: ResolvedRunPlan, kubectl_cmd: str) -> None:
     )
 
 
-def _patch_standalone_envoy_volume(
+def _envoy_args_with_log_level(args: list[Any], log_level: str) -> list[str]:
+    patched_args = [str(arg) for arg in args]
+    for index, arg in enumerate(patched_args):
+        if arg == "--log-level":
+            if index + 1 < len(patched_args):
+                patched_args[index + 1] = log_level
+            else:
+                patched_args.append(log_level)
+            return patched_args
+        if arg.startswith("--log-level="):
+            patched_args[index] = f"--log-level={log_level}"
+            return patched_args
+
+    patched_args.extend(["--log-level", log_level])
+    return patched_args
+
+
+def _patch_standalone_envoy_deployment(
     plan: ResolvedRunPlan, kubectl_cmd: str, *, skip_if_missing: bool = False
 ) -> None:
     deployment_name = f"{_llmd_recipe_scheduler_release_name(plan)}-epp"
     configmap_name = _llmd_recipe_standalone_envoy_configmap_name(plan)
+    deployment_result = run_command(
+        [
+            kubectl_cmd,
+            "get",
+            "deployment",
+            deployment_name,
+            "-n",
+            plan.deployment.namespace,
+            "-o",
+            "json",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if deployment_result.returncode != 0:
+        if skip_if_missing:
+            return
+        raise CommandError(
+            f"failed to read llm-d standalone EPP deployment {deployment_name}: "
+            f"{(deployment_result.stderr or deployment_result.stdout or '').strip()}"
+        )
+    try:
+        deployment = json.loads(deployment_result.stdout)
+    except json.JSONDecodeError as exc:
+        raise CommandError(
+            f"failed to parse llm-d standalone EPP deployment {deployment_name}"
+        ) from exc
+
+    containers = (
+        deployment.get("spec", {})
+        .get("template", {})
+        .get("spec", {})
+        .get("containers", [])
+    )
+    envoy_container = next(
+        (
+            container
+            for container in containers
+            if container.get("name") == _STANDALONE_ENVOY_CONTAINER
+        ),
+        None,
+    )
+    if not envoy_container:
+        raise CommandError(
+            f"llm-d standalone EPP deployment {deployment_name} has no "
+            f"{_STANDALONE_ENVOY_CONTAINER} container"
+        )
+
+    envoy_args = envoy_container.get("args")
+    if not isinstance(envoy_args, list) or not envoy_args:
+        raise CommandError(
+            f"llm-d standalone Envoy container in {deployment_name} has no args "
+            "to patch safely"
+        )
+
+    readiness_probe = dict(envoy_container.get("readinessProbe") or {})
+    readiness_probe["timeoutSeconds"] = max(
+        int(readiness_probe.get("timeoutSeconds") or 0),
+        _STANDALONE_ENVOY_READINESS_TIMEOUT_SECONDS,
+    )
+    readiness_probe["failureThreshold"] = max(
+        int(readiness_probe.get("failureThreshold") or 0),
+        _STANDALONE_ENVOY_READINESS_FAILURE_THRESHOLD,
+    )
+
     patch = {
         "spec": {
             "template": {
                 "spec": {
+                    "containers": [
+                        {
+                            "name": _STANDALONE_ENVOY_CONTAINER,
+                            "args": _envoy_args_with_log_level(
+                                envoy_args, _STANDALONE_ENVOY_LOG_LEVEL
+                            ),
+                            "readinessProbe": readiness_probe,
+                        }
+                    ],
                     "volumes": [
                         {
                             "name": "config",
@@ -1060,12 +1155,17 @@ def _patch_standalone_envoy_volume(
                                 "items": [{"key": "envoy.yaml", "path": "envoy.yaml"}],
                             },
                         }
-                    ]
+                    ],
                 }
             }
         }
     }
-    step(f"Patching llm-d standalone Envoy volume to use ConfigMap {configmap_name}")
+    step(
+        "Patching llm-d standalone Envoy sidecar "
+        f"(ConfigMap {configmap_name}, log level {_STANDALONE_ENVOY_LOG_LEVEL}, "
+        "readiness timeout "
+        f"{_STANDALONE_ENVOY_READINESS_TIMEOUT_SECONDS}s)"
+    )
     result = run_command(
         [
             kubectl_cmd,
@@ -1086,7 +1186,7 @@ def _patch_standalone_envoy_volume(
     if skip_if_missing and "not found" in (result.stderr or "").lower():
         return
     raise CommandError(
-        f"failed to patch llm-d standalone Envoy volume for {deployment_name}: "
+        f"failed to patch llm-d standalone Envoy sidecar for {deployment_name}: "
         f"{(result.stderr or result.stdout or '').strip()}"
     )
 
@@ -1252,7 +1352,7 @@ def deploy_llmd(
     ):
         _ensure_gaie_rbac(plan, kubectl_cmd)
         if str(plan.deployment.gateway or "").strip() == "standalone":
-            _patch_standalone_envoy_volume(plan, kubectl_cmd, skip_if_missing=True)
+            _patch_standalone_envoy_deployment(plan, kubectl_cmd, skip_if_missing=True)
         success(
             "Skipping deploy; llm-d Helm release already exists for "
             f"{plan.deployment.release_name}"
@@ -1405,7 +1505,7 @@ def deploy_llmd(
             # values, but v1.5.0 still hard-codes the mounted volume reference to
             # "envoy". Patch the Deployment so parallel BenchFlow releases do not
             # fight over one shared ConfigMap.
-            _patch_standalone_envoy_volume(plan, kubectl_cmd)
+            _patch_standalone_envoy_deployment(plan, kubectl_cmd)
 
         if gateway_dir is not None:
             step(f"Applying llm-d gateway resources from {gateway_dir}")
