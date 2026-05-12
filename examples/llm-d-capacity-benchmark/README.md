@@ -30,6 +30,7 @@ This benchmark evaluates KV cache scheduling strategies under controlled load co
 - **`deploy_benchmark_with_pvc.sh`** - Deploy benchmark pod with persistent storage
 - **`copy_benchmark_results.sh`** - Retrieve results from PVC after completion
 - **`check_deployment.sh`** - Verify deployment and auto-detect endpoints
+- **`qwen3-32b-direct-service.yaml`** - Optional: K8s service for direct model access
 - **`README.md`** - This documentation
 
 ## Prerequisites
@@ -55,8 +56,11 @@ Default values (customizable via environment variables):
 ### 2. Run the Benchmark
 
 ```bash
-# Deploy benchmark pod with persistent storage
+# Deploy benchmark pod with persistent storage (default: gateway mode)
 ./deploy_benchmark_with_pvc.sh
+
+# OR: Run in direct service mode (bypass gateway)
+USE_DIRECT_SERVICE=true ./deploy_benchmark_with_pvc.sh
 ```
 
 This creates:
@@ -157,6 +161,27 @@ Based on the llm-d reference results:
 export NAMESPACE=my-namespace          # Kubernetes namespace
 export RELEASE_NAME=my-model           # Deployment release name
 export MODEL_NAME=MyOrg/MyModel        # HuggingFace model name
+export USE_DIRECT_SERVICE=true         # Bypass gateway, use direct model service (default: false)
+export DIRECT_SVC=my-custom-svc        # Custom service name for direct mode (default: ms-${RELEASE_NAME})
+```
+
+#### Endpoint Modes
+
+**Gateway Mode (default)**: Routes traffic through llm-d's inference gateway and scheduler
+- Endpoint: `infra-{release}-inference-gateway-istio.{namespace}.svc.cluster.local:80`
+- Enables advanced features: request routing, KV cache scheduling, load balancing
+- Best for testing scheduler strategies (precise, estimated, random)
+
+**Direct Service Mode**: Bypasses gateway, sends requests directly to model pods
+- Endpoint: `ms-{release}.{namespace}.svc.cluster.local:8000`
+- No gateway overhead, no advanced scheduling
+- Useful for baseline measurements or debugging
+- Enable with: `export USE_DIRECT_SERVICE=true`
+
+To create a custom direct service (optional):
+```bash
+kubectl apply -f qwen3-32b-direct-service.yaml
+export DIRECT_SVC=qwen3-32b-direct
 ```
 
 ### Workload Parameters

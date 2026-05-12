@@ -4,16 +4,28 @@ set -euo pipefail
 # Benchmark Pod with Persistent Volume for Results
 
 export KUBECONFIG=/home/michey/kubeconfigs/kubeconfig.llmd.fra
-NAMESPACE="benchflow"
-RELEASE_NAME="qwen3-32b"
-MODEL_NAME="Qwen/Qwen3-32B"
+NAMESPACE="${NAMESPACE:-benchflow}"
+RELEASE_NAME="${RELEASE_NAME:-qwen3-32b}"
+MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-32B}"
 BENCHMARK_IMAGE="ghcr.io/llm-d/llm-d-benchmark:v0.6.0"
 
-# Use the Istio gateway endpoint
-GATEWAY_SVC="infra-${RELEASE_NAME}-inference-gateway-istio"
-BASE_URL="http://${GATEWAY_SVC}.${NAMESPACE}.svc.cluster.local:80"
+# Endpoint selection: gateway (default) or direct service
+# Set USE_DIRECT_SERVICE=true to bypass gateway and hit model service directly
+USE_DIRECT_SERVICE="${USE_DIRECT_SERVICE:-false}"
 
-echo "Using endpoint: ${BASE_URL}"
+if [ "${USE_DIRECT_SERVICE}" = "true" ]; then
+    # Direct service endpoint (bypasses gateway/router)
+    # For llm-d v0.6.0+, use the model service directly
+    DIRECT_SVC="${DIRECT_SVC:-ms-${RELEASE_NAME}}"
+    BASE_URL="http://${DIRECT_SVC}.${NAMESPACE}.svc.cluster.local:8000"
+    echo "Using DIRECT SERVICE endpoint: ${BASE_URL}"
+else
+    # Gateway endpoint (default) - routes through llm-d gateway/scheduler
+    GATEWAY_SVC="infra-${RELEASE_NAME}-inference-gateway-istio"
+    BASE_URL="http://${GATEWAY_SVC}.${NAMESPACE}.svc.cluster.local:80"
+    echo "Using GATEWAY endpoint: ${BASE_URL}"
+fi
+
 echo "Using image: ${BENCHMARK_IMAGE}"
 
 # Workload parameters

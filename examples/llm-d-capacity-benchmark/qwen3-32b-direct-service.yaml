@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen3-32b-direct
+  namespace: benchflow
+  labels:
+    app: qwen3-32b-direct
+    benchflow.io/benchmark-target: "true"
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  selector:
+    # Select the llm-d model service pods
+    # Adjust these labels based on your actual pod labels
+    app.kubernetes.io/name: llm-d-modelservice
+    app.kubernetes.io/instance: qwen3-32b
+    app.kubernetes.io/component: decode
+---
+# Alternative: Use the existing llm-d service
+# For llm-d v0.6.0+, the service 'ms-qwen3-32b' should already exist
+# You can use it directly without creating a new service:
+#   http://ms-qwen3-32b.benchflow.svc.cluster.local:8000
