@@ -144,6 +144,13 @@ EOFCONFIG
 
 # Create benchmark pod
 POD_NAME="benchmark-capacity-73-${RELEASE_NAME}"
+
+# Delete existing pod if it exists (pod spec args can't be updated)
+if kubectl get pod "${POD_NAME}" -n "${NAMESPACE}" &>/dev/null; then
+    echo "Deleting existing pod: ${POD_NAME}"
+    kubectl delete pod "${POD_NAME}" -n "${NAMESPACE}" --wait=true
+fi
+
 echo "Creating benchmark pod: ${POD_NAME}"
 
 kubectl apply -f - << EOF
