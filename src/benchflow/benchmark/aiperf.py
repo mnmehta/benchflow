@@ -347,7 +347,12 @@ def run_benchmark(
                 )
             mlflow.set_tracking_uri(tracking_uri)
             mlflow.set_experiment(plan.mlflow.experiment)
-            with mlflow.start_run(tags=tags) as run:
+
+            # Use execution name for MLflow run name (if provided by orchestrator)
+            execution_name = os.environ.get("EXECUTION_NAME", "")
+            run_name = execution_name if execution_name else None
+
+            with mlflow.start_run(run_name=run_name, tags=tags) as run:
                 run_id = run.info.run_id
                 mlflow.log_param("benchmark_tool", "aiperf")
                 mlflow.log_param("backend_type", plan.benchmark.backend_type)
