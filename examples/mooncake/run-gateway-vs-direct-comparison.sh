@@ -197,18 +197,19 @@ EOF
     echo ""
 
     log_info "Submitting gateway benchmark experiment..."
-    KUBECONFIG="${BFLOW_KUBECONFIG}" bflow experiment run "${GATEWAY_EXPERIMENT}" \
+    GATEWAY_OUTPUT=$(KUBECONFIG="${BFLOW_KUBECONFIG}" bflow experiment run "${GATEWAY_EXPERIMENT}" \
         --cluster-name "${CLUSTER_NAME}" \
         --llmd-repo-ref "${REPO_REF}" \
         --no-cleanup \
-        --no-download
+        --no-download 2>&1)
 
-    # Get the PipelineRun name
-    sleep 5  # Give time for PipelineRun to be created
-    GATEWAY_RUN=$(get_latest_pipelinerun "benchflow.io/experiment=gpt-oss-120b-llm-d-release")
+    echo "${GATEWAY_OUTPUT}"
+
+    # Extract PipelineRun name from last line of output
+    GATEWAY_RUN=$(echo "${GATEWAY_OUTPUT}" | tail -1 | tr -d '[:space:]')
 
     if [ -z "${GATEWAY_RUN}" ]; then
-        log_error "Could not find PipelineRun for gateway benchmark"
+        log_error "Could not extract PipelineRun name from bflow output"
         exit 1
     fi
 
@@ -249,19 +250,20 @@ EOF
     echo ""
 
     log_info "Submitting direct service benchmark experiment..."
-    KUBECONFIG="${BFLOW_KUBECONFIG}" bflow experiment run "${DIRECT_EXPERIMENT}" \
+    DIRECT_OUTPUT=$(KUBECONFIG="${BFLOW_KUBECONFIG}" bflow experiment run "${DIRECT_EXPERIMENT}" \
         --cluster-name "${CLUSTER_NAME}" \
         --llmd-repo-ref "${REPO_REF}" \
         --no-download \
         --no-deploy \
-        --no-cleanup
+        --no-cleanup 2>&1)
 
-    # Get the PipelineRun name (use different experiment name for direct)
-    sleep 5
-    DIRECT_RUN=$(get_latest_pipelinerun "benchflow.io/experiment=gpt-oss-120b-llm-d-release-direct")
+    echo "${DIRECT_OUTPUT}"
+
+    # Extract PipelineRun name from last line of output
+    DIRECT_RUN=$(echo "${DIRECT_OUTPUT}" | tail -1 | tr -d '[:space:]')
 
     if [ -z "${DIRECT_RUN}" ]; then
-        log_error "Could not find PipelineRun for direct benchmark"
+        log_error "Could not extract PipelineRun name from bflow output"
         exit 1
     fi
 
