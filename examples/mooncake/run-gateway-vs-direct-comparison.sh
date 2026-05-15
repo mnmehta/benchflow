@@ -207,7 +207,6 @@ EOF
     GATEWAY_OUTPUT=$(KUBECONFIG="${BFLOW_KUBECONFIG}" bflow experiment run "${GATEWAY_EXPERIMENT}" \
         --cluster-name "${CLUSTER_NAME}" \
         --llmd-repo-ref "${REPO_REF}" \
-        --no-cleanup \
         --no-download 2>&1)
 
     echo "${GATEWAY_OUTPUT}"
