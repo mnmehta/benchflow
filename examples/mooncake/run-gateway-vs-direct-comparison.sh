@@ -4,11 +4,13 @@ set -euo pipefail
 #
 # Mooncake Benchmark: Gateway vs Direct Service Comparison
 #
-# This script runs the Mooncake benchmark twice:
-# 1. First run: Deploy gpt-oss-120b and benchmark via intelligent gateway (with scheduling)
-# 2. Second run: Benchmark the same deployment via direct K8s service (no scheduling)
+# This script runs the Mooncake benchmark in three phases:
+# 1. Phase 1: Deploy gpt-oss-120b and benchmark via intelligent gateway (with scheduling)
+# 2. Phase 2A: Deploy fresh gpt-oss-120b instance (clean KV cache, no pollution from Phase 1)
+# 3. Phase 2B: Benchmark via direct K8s service (bypasses gateway, round-robin routing)
 #
-# This allows comparing the performance impact of llm-d's intelligent scheduling/routing.
+# This allows comparing the performance impact of llm-d's intelligent scheduling/routing
+# while ensuring fair comparison with clean KV cache state for the direct benchmark.
 #
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,7 +25,8 @@ REPO_REF="${REPO_REF:-v0.6.0}"
 
 # Experiment files
 GATEWAY_EXPERIMENT="${BENCHFLOW_ROOT}/experiments/llm-d/gpt-oss-120b-release.yaml"
-DIRECT_EXPERIMENT="${SCRIPT_DIR}/gpt-oss-120b-release-direct.yaml"
+DIRECT_DEPLOY_EXPERIMENT="${SCRIPT_DIR}/gpt-oss-120b-release-direct-deploy.yaml"
+DIRECT_BENCHMARK_EXPERIMENT="${SCRIPT_DIR}/gpt-oss-120b-release-direct-benchmark.yaml"
 DIRECT_SERVICE_YAML="${SCRIPT_DIR}/gpt-oss-120b-direct-service.yaml"
 
 # Colors for output
@@ -134,8 +137,12 @@ check_prerequisites() {
         log_error "Gateway experiment not found: ${GATEWAY_EXPERIMENT}"
         exit 1
     fi
-    if [ ! -f "${DIRECT_EXPERIMENT}" ]; then
-        log_error "Direct experiment not found: ${DIRECT_EXPERIMENT}"
+    if [ ! -f "${DIRECT_DEPLOY_EXPERIMENT}" ]; then
+        log_error "Direct deploy experiment not found: ${DIRECT_DEPLOY_EXPERIMENT}"
+        exit 1
+    fi
+    if [ ! -f "${DIRECT_BENCHMARK_EXPERIMENT}" ]; then
+        log_error "Direct benchmark experiment not found: ${DIRECT_BENCHMARK_EXPERIMENT}"
         exit 1
     fi
     if [ ! -f "${DIRECT_SERVICE_YAML}" ]; then
@@ -227,60 +234,111 @@ EOF
     echo ""
 
     # =========================================================================
-    # PHASE 2: Create direct service and benchmark
+    # PHASE 2A: Deploy fresh direct instance (clean KV cache)
     # =========================================================================
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "PHASE 2: Create direct service and benchmark without gateway"
+    log_info "PHASE 2A: Deploy fresh direct instance (no KV cache pollution)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    log_info "Submitting direct deployment experiment (deploy-only, no benchmark)..."
+    DIRECT_DEPLOY_OUTPUT=$(KUBECONFIG="${BFLOW_KUBECONFIG}" bflow experiment run "${DIRECT_DEPLOY_EXPERIMENT}" \
+        --cluster-name "${CLUSTER_NAME}" \
+        --llmd-repo-ref "${REPO_REF}" \
+        --no-download \
+        --no-cleanup 2>&1)
+
+    echo "${DIRECT_DEPLOY_OUTPUT}"
+
+    # Extract PipelineRun name from last line of output
+    DIRECT_DEPLOY_RUN=$(echo "${DIRECT_DEPLOY_OUTPUT}" | tail -1 | tr -d '[:space:]')
+
+    if [ -z "${DIRECT_DEPLOY_RUN}" ]; then
+        log_error "Could not extract PipelineRun name from bflow output"
+        exit 1
+    fi
+
+    log_info "PipelineRun created: ${DIRECT_DEPLOY_RUN}"
+    log_info "Monitor with: kubectl logs -n ${NAMESPACE} -l tekton.dev/pipelineRun=${DIRECT_DEPLOY_RUN} -f --all-containers"
+    echo ""
+
+    # Wait for deployment to complete
+    if ! wait_for_pipelinerun "${DIRECT_DEPLOY_RUN}" 7200; then
+        log_error "Direct deployment failed. Aborting."
+        exit 1
+    fi
+
+    log_success "Direct deployment completed!"
+    echo ""
+
+    # =========================================================================
+    # PHASE 2B: Create direct service and benchmark
+    # =========================================================================
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "PHASE 2B: Create direct service and benchmark (bypass gateway)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
     log_info "Creating direct service on target cluster..."
     KUBECONFIG="${TARGET_KUBECONFIG}" kubectl apply -f "${DIRECT_SERVICE_YAML}" -n "${NAMESPACE}"
 
-    # Verify service was created
-    sleep 2
+    # Verify service was created and has endpoints
+    sleep 5
     if KUBECONFIG="${TARGET_KUBECONFIG}" kubectl get service gpt-oss-120b-direct -n "${NAMESPACE}" &> /dev/null; then
         log_success "Direct service 'gpt-oss-120b-direct' created"
+
+        # Check for endpoints
+        ENDPOINT_COUNT=$(KUBECONFIG="${TARGET_KUBECONFIG}" kubectl get endpoints gpt-oss-120b-direct -n "${NAMESPACE}" \
+            -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null | wc -w || echo "0")
+
+        if [ "${ENDPOINT_COUNT}" -gt 0 ]; then
+            log_success "Service has ${ENDPOINT_COUNT} endpoint(s) ready"
+        else
+            log_warn "Service created but no endpoints found yet (may still be initializing)"
+        fi
     else
         log_error "Failed to create direct service"
         exit 1
     fi
     echo ""
 
-    log_info "Submitting direct service benchmark experiment..."
-    DIRECT_OUTPUT=$(KUBECONFIG="${BFLOW_KUBECONFIG}" bflow experiment run "${DIRECT_EXPERIMENT}" \
+    log_info "Submitting direct benchmark experiment (benchmark-only, via service)..."
+    DIRECT_BENCH_OUTPUT=$(KUBECONFIG="${BFLOW_KUBECONFIG}" bflow experiment run "${DIRECT_BENCHMARK_EXPERIMENT}" \
         --cluster-name "${CLUSTER_NAME}" \
         --llmd-repo-ref "${REPO_REF}" \
         --no-download \
         --no-deploy \
         --no-cleanup 2>&1)
 
-    echo "${DIRECT_OUTPUT}"
+    echo "${DIRECT_BENCH_OUTPUT}"
 
     # Extract PipelineRun name from last line of output
-    DIRECT_RUN=$(echo "${DIRECT_OUTPUT}" | tail -1 | tr -d '[:space:]')
+    DIRECT_BENCH_RUN=$(echo "${DIRECT_BENCH_OUTPUT}" | tail -1 | tr -d '[:space:]')
 
-    if [ -z "${DIRECT_RUN}" ]; then
+    if [ -z "${DIRECT_BENCH_RUN}" ]; then
         log_error "Could not extract PipelineRun name from bflow output"
         exit 1
     fi
 
-    # Verify it's different from gateway run
-    if [ "${DIRECT_RUN}" = "${GATEWAY_RUN}" ]; then
-        log_error "Direct and gateway PipelineRuns are the same! This should not happen."
+    # Verify it's different from other runs
+    if [ "${DIRECT_BENCH_RUN}" = "${GATEWAY_RUN}" ] || [ "${DIRECT_BENCH_RUN}" = "${DIRECT_DEPLOY_RUN}" ]; then
+        log_error "PipelineRun names conflict!"
         log_error "Gateway: ${GATEWAY_RUN}"
-        log_error "Direct: ${DIRECT_RUN}"
+        log_error "Direct Deploy: ${DIRECT_DEPLOY_RUN}"
+        log_error "Direct Bench: ${DIRECT_BENCH_RUN}"
         exit 1
     fi
 
-    log_info "PipelineRun created: ${DIRECT_RUN}"
-    log_info "Monitor with: kubectl logs -n ${NAMESPACE} -l tekton.dev/pipelineRun=${DIRECT_RUN} -f --all-containers"
+    log_info "PipelineRun created: ${DIRECT_BENCH_RUN}"
+    log_info "Monitor with: kubectl logs -n ${NAMESPACE} -l tekton.dev/pipelineRun=${DIRECT_BENCH_RUN} -f --all-containers"
     echo ""
 
     # Wait for completion
-    if ! wait_for_pipelinerun "${DIRECT_RUN}" 7200; then
+    if ! wait_for_pipelinerun "${DIRECT_BENCH_RUN}" 7200; then
         log_error "Direct benchmark failed. Aborting."
         exit 1
     fi
@@ -297,20 +355,25 @@ EOF
     echo "║                         BENCHMARK COMPARISON COMPLETE                      ║"
     echo "╚════════════════════════════════════════════════════════════════════════════╝"
     echo ""
-    log_success "Both benchmarks completed successfully!"
+    log_success "All phases completed successfully!"
     echo ""
-    log_info "Results Summary:"
-    log_info "  Gateway benchmark (with scheduling): ${GATEWAY_RUN}"
-    log_info "  Direct benchmark (no scheduling):    ${DIRECT_RUN}"
+    log_info "PipelineRun Summary:"
+    log_info "  Phase 1 - Gateway benchmark:          ${GATEWAY_RUN}"
+    log_info "  Phase 2A - Direct deployment:         ${DIRECT_DEPLOY_RUN}"
+    log_info "  Phase 2B - Direct benchmark:          ${DIRECT_BENCH_RUN}"
     echo ""
     log_info "Compare results in MLflow:"
     log_info "  Experiment: michey-gpt-oss-120b-mooncake"
     log_info "  URL: https://mlflow.apps.aperdomo-lab.ibm.rhperfscale.org/#/experiments/43"
     echo ""
     log_info "Expected differences:"
-    log_info "  - Gateway: Better TTFT via KV-cache-aware routing"
-    log_info "  - Gateway: More balanced load across pods"
-    log_info "  - Direct:  Round-robin, no cache optimization"
+    log_info "  - Gateway (${GATEWAY_RUN}):"
+    log_info "    Better TTFT via KV-cache-aware routing"
+    log_info "    More balanced load across pods"
+    log_info "  - Direct (${DIRECT_BENCH_RUN}):"
+    log_info "    Round-robin service routing"
+    log_info "    No cache-aware optimization"
+    log_info "    Fresh deployment ensures no KV cache pollution"
     echo ""
 }
 

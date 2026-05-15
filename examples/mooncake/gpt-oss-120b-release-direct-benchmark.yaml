@@ -1,0 +1,34 @@
+apiVersion: benchflow.io/v1alpha1
+kind: Experiment
+metadata:
+  name: gpt-oss-120b-llm-d-direct-bench
+spec:
+  model:
+    name:
+      - openai/gpt-oss-120b
+  deployment_profile:
+    - llm-d-inference-scheduling
+  benchmark_profile:
+    - aiperf-mooncake-trace
+  metrics_profile: detailed
+  mlflow:
+    tags:
+      accelerator: H200
+      routing_mode: direct-service
+      note: "Bypasses gateway - direct service to model pods"
+    experiment: michey-gpt-oss-120b-mooncake
+  namespace: benchflow
+  execution:
+    timeout: 8h
+  target:
+    base_url: http://gpt-oss-120b-direct:8000
+    metrics_release_name: gpt-oss-120b-llm-d-release-direct
+  overrides:
+    benchmark:
+      request_type: text_completions
+    runtime:
+      resources:
+        requests:
+          cpu: "12"
+        limits:
+          cpu: "12"
