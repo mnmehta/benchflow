@@ -5,7 +5,7 @@ set -euo pipefail
 # Mooncake Benchmark: Gateway vs Direct Service Comparison
 #
 # This script runs the Mooncake benchmark in three phases:
-# 1. Phase 1: Deploy gpt-oss-120b and benchmark via intelligent gateway (with scheduling)
+# 1. Phase 1: Deploy gpt-oss-120b and benchmark via intelligent gateway (with cleanup)
 # 2. Phase 2A: Deploy fresh gpt-oss-120b instance (clean KV cache, no pollution from Phase 1)
 # 3. Phase 2B: Benchmark via direct K8s service (bypasses gateway, round-robin routing)
 #
@@ -248,6 +248,7 @@ EOF
         --cluster-name "${CLUSTER_NAME}" \
         --llmd-repo-ref "${REPO_REF}" \
         --no-download \
+        --no-benchmark \
         --no-cleanup 2>&1)
 
     echo "${DIRECT_DEPLOY_OUTPUT}"
@@ -357,23 +358,20 @@ EOF
     echo ""
     log_success "All phases completed successfully!"
     echo ""
-    log_info "PipelineRun Summary:"
-    log_info "  Phase 1 - Gateway benchmark:          ${GATEWAY_RUN}"
-    log_info "  Phase 2A - Direct deployment:         ${DIRECT_DEPLOY_RUN}"
-    log_info "  Phase 2B - Direct benchmark:          ${DIRECT_BENCH_RUN}"
+    log_info "Results Summary:"
+    log_info "  Gateway benchmark (with scheduling): ${GATEWAY_RUN}"
+    log_info "  Direct deployment (deploy-only):     ${DIRECT_DEPLOY_RUN}"
+    log_info "  Direct benchmark (no scheduling):    ${DIRECT_BENCH_RUN}"
     echo ""
     log_info "Compare results in MLflow:"
     log_info "  Experiment: michey-gpt-oss-120b-mooncake"
     log_info "  URL: https://mlflow.apps.aperdomo-lab.ibm.rhperfscale.org/#/experiments/43"
     echo ""
     log_info "Expected differences:"
-    log_info "  - Gateway (${GATEWAY_RUN}):"
-    log_info "    Better TTFT via KV-cache-aware routing"
-    log_info "    More balanced load across pods"
-    log_info "  - Direct (${DIRECT_BENCH_RUN}):"
-    log_info "    Round-robin service routing"
-    log_info "    No cache-aware optimization"
-    log_info "    Fresh deployment ensures no KV cache pollution"
+    log_info "  - Gateway: Better TTFT via KV-cache-aware routing"
+    log_info "  - Gateway: More balanced load across pods"
+    log_info "  - Direct:  Round-robin, no cache optimization"
+    log_info "  - Fresh deployment ensures no KV cache pollution"
     echo ""
 }
 

@@ -8,8 +8,15 @@ spec:
       - openai/gpt-oss-120b
   deployment_profile:
     - llm-d-inference-scheduling
-  # NO benchmark_profile - deploy only
+  benchmark_profile:
+    - aiperf-mooncake-trace
   metrics_profile: detailed
+  mlflow:
+    tags:
+      accelerator: H200
+      routing_mode: direct-gateway
+      note: "Direct deployment - benchmark via llm-d gateway (not direct service)"
+    experiment: michey-gpt-oss-120b-mooncake
   namespace: benchflow
   execution:
     timeout: 8h
