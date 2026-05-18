@@ -287,6 +287,7 @@ def experiment_from_args(args: argparse.Namespace) -> Experiment:
             if getattr(args, "target_metrics_release_name", None) is not None
             else base_experiment.spec.target.metrics_release_name
         ),
+        force_deploy=base_experiment.spec.target.force_deploy,
     )
     target_host_aliases = dict(base_experiment.spec.target_cluster.host_aliases)
     if resolved_target_kubeconfig_secret:

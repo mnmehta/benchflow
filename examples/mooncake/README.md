@@ -14,7 +14,9 @@ This measures the benefit of intelligent scheduling for workloads with significa
 ## Files
 
 - **`run-gateway-vs-direct-comparison.sh`**: Main benchmark script
-- **`gpt-oss-120b-release-direct.yaml`**: Experiment config for direct service benchmark
+- **`gpt-oss-120b-release-direct-deploy.yaml`**: Deploy-only experiment (Phase 2A)
+- **`gpt-oss-120b-release-direct-benchmark.yaml`**: Benchmark-only experiment (Phase 2B)
+- **`gpt-oss-120b-release-direct-combined.yaml`**: Combined deploy+benchmark using `force_deploy` (alternative to 2-stage)
 - **`gpt-oss-120b-direct-service.yaml`**: Kubernetes service for direct pod access
 - **`README.md`**: This documentation
 
@@ -174,6 +176,63 @@ bflow benchmark plot comparison \
 **Total Duration**: ~20-30 minutes per run  
 
 See `../../MOONCAKE_ANALYSIS.md` for detailed workload analysis.
+
+## Deployment Approaches
+
+### Two-Stage Approach (Current Script Default)
+
+The script uses a two-stage process to ensure fresh deployment and complete artifact collection:
+
+**Phase 2A - Deploy Only:**
+```bash
+bflow experiment run gpt-oss-120b-release-direct-deploy.yaml --no-benchmark
+```
+- Deploys model with release name `gpt-oss-120b-llm-d-release-direct`
+- Creates pods, gateway, services, etc.
+- No benchmark runs
+
+**Phase 2B - Benchmark Only:**
+```bash
+# First create the direct service
+kubectl apply -f gpt-oss-120b-direct-service.yaml
+
+# Then run benchmark
+bflow experiment run gpt-oss-120b-release-direct-benchmark.yaml --no-deploy
+```
+- Benchmarks via `target.base_url` (direct service)
+- Collects artifacts from deployed pods (via `metrics_release_name`)
+- Skips deployment (already done in Phase 2A)
+
+### Single-Stage Approach (Using `force_deploy`)
+
+Alternatively, use the combined experiment with `force_deploy: true`:
+
+```bash
+# Create service first
+kubectl apply -f gpt-oss-120b-direct-service.yaml
+
+# Run combined deploy + benchmark
+bflow experiment run gpt-oss-120b-release-direct-combined.yaml
+```
+
+**Key difference:** The combined experiment has `target.force_deploy: true`, which tells BenchFlow to:
+1. Deploy the model (normally skipped when `target.base_url` is set)
+2. Benchmark via the target URL (not the deployed gateway)
+3. Collect complete artifacts from the deployment
+4. Clean up the deployment
+
+**Example YAML:**
+```yaml
+spec:
+  target:
+    base_url: http://gpt-oss-120b-direct:8000
+    metrics_release_name: gpt-oss-120b-llm-d-release-direct
+    force_deploy: true  # Deploy AND use custom target URL
+```
+
+**When to use each approach:**
+- **Two-stage**: More explicit control, easier to debug individual phases
+- **Single-stage**: Simpler orchestration, guaranteed artifact completeness
 
 ## Cleanup
 

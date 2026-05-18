@@ -374,6 +374,7 @@ def _experiment_target_from_dict(raw: dict[str, Any] | None) -> ExperimentTarget
     base_url = str(raw.get("base_url", "") or "").strip()
     path = str(raw.get("path", "/v1/models") or "/v1/models").strip()
     metrics_release_name = str(raw.get("metrics_release_name", "") or "").strip()
+    force_deploy = _as_bool(raw.get("force_deploy"), False)
     if not path:
         raise ValidationError("target.path must not be empty")
     if raw and not base_url:
@@ -382,6 +383,7 @@ def _experiment_target_from_dict(raw: dict[str, Any] | None) -> ExperimentTarget
         base_url=base_url,
         path=path,
         metrics_release_name=metrics_release_name,
+        force_deploy=force_deploy,
     )
 
 

@@ -68,6 +68,13 @@ def _validate_existing_target_support(experiment: Experiment) -> None:
 def _resolved_stage_spec(experiment: Experiment) -> StageSpec:
     if not experiment.spec.target.enabled():
         return experiment.spec.stages
+
+    # If force_deploy is set, allow deployment to run normally
+    # but benchmark will still use the target URL
+    if experiment.spec.target.force_deploy:
+        return experiment.spec.stages
+
+    # Default behavior: skip deployment when target is specified
     return StageSpec(
         download=False,
         deploy=False,
@@ -389,6 +396,7 @@ def resolve_run_plan(
             base_url=experiment.spec.target.base_url.rstrip("/"),
             path=experiment.spec.target.path,
             metrics_release_name=experiment.spec.target.metrics_release_name,
+            force_deploy=experiment.spec.target.force_deploy,
         )
         if experiment.spec.target.enabled()
         else _target_for(
