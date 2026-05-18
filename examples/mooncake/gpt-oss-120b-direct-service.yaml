@@ -16,5 +16,5 @@ spec:
   selector:
     llm-d.ai/inference-serving: "true"
     llm-d.ai/inferenceServing: "true"
-    llm-d.ai/model: gpt-oss-120b-llm-d-release-direct
+    llm-d.ai/model: gpt-oss-120b-llm-d-direct-combined
     llm-d.ai/role: decode

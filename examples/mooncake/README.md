@@ -294,6 +294,27 @@ kubectl get endpoints gpt-oss-120b-direct -n benchflow
 kubectl get pods -n benchflow -l app.kubernetes.io/component=decode
 ```
 
+**Important**: The service selector must match the experiment's `metadata.name`. If the wait-for-endpoint task is stuck:
+
+1. Check pod labels:
+   ```bash
+   kubectl get pods -n benchflow -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.llm-d\.ai/model}{"\n"}{end}' | grep direct
+   ```
+
+2. Check service selector:
+   ```bash
+   kubectl get service gpt-oss-120b-direct -n benchflow -o jsonpath='{.spec.selector.llm-d\.ai/model}'
+   ```
+
+3. If they don't match, update the service selector:
+   ```bash
+   kubectl patch service gpt-oss-120b-direct -n benchflow \
+     --type=json \
+     -p='[{"op": "replace", "path": "/spec/selector/llm-d.ai~1model", "value": "<experiment-name>"}]'
+   ```
+
+The service YAML has been updated to match the combined experiment name (`gpt-oss-120b-llm-d-direct-combined`).
+
 ### Gateway Not Found (Use Target KUBECONFIG)
 
 If the gateway benchmark fails:
