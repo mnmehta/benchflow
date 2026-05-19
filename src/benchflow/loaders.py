@@ -562,7 +562,7 @@ def _aiperf_benchmark_from_dict(raw: dict[str, Any]) -> AiperfBenchmarkSpec:
                 f"spec.aiperf.synthesis_speedup_ratio must be a number, got {synthesis_speedup_ratio_raw!r}"
             )
     else:
-        synthesis_speedup_ratio = 10.0
+        synthesis_speedup_ratio = None
 
     return AiperfBenchmarkSpec(
         dataset_url=str(raw.get("dataset_url", "") or "").strip(),
