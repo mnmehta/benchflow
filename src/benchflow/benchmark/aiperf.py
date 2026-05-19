@@ -274,10 +274,11 @@ def _build_command(
     if aiperf.streaming:
         command.append("--streaming")
     # Fixed-schedule mode: use trace timestamps (default for trace datasets)
-    # Disabled mode: use request-rate or concurrency instead
-    if not aiperf.disable_fixed_schedule:
-        if aiperf.fixed_schedule:
-            command.append("--fixed-schedule")
+    # --no-fixed-schedule: suppress auto-promotion and use request-rate/concurrency
+    if aiperf.disable_fixed_schedule:
+        command.append("--no-fixed-schedule")
+    elif aiperf.fixed_schedule:
+        command.append("--fixed-schedule")
         if aiperf.fixed_schedule_auto_offset:
             command.append("--fixed-schedule-auto-offset")
     if aiperf.request_rate is not None:
