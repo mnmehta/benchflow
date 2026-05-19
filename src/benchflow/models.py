@@ -396,10 +396,12 @@ class AiperfBenchmarkSpec:
     streaming: bool = True
     fixed_schedule: bool = True
     fixed_schedule_auto_offset: bool = True
+    disable_fixed_schedule: bool = False
     synthesis_max_isl: int | None = None
-    synthesis_speedup_ratio: float | None = None
     fixed_schedule_end_offset: int | None = None
     dataset_cap: int | None = None
+    request_rate: int | None = None
+    concurrency: int | None = None
     export_level: str = ""
     export_http_trace: bool = False
     max_seconds: int = 7200

@@ -277,14 +277,18 @@ def _build_command(
         command.append("--fixed-schedule")
     if aiperf.fixed_schedule_auto_offset:
         command.append("--fixed-schedule-auto-offset")
+    if aiperf.disable_fixed_schedule:
+        command.append("--no-fixed-schedule")
+    if aiperf.request_rate is not None:
+        command.extend(["--request-rate", str(aiperf.request_rate)])
+    if aiperf.concurrency is not None:
+        command.extend(["--concurrency", str(aiperf.concurrency)])
     if aiperf.export_level:
         command.extend(["--export-level", aiperf.export_level])
     if aiperf.export_http_trace:
         command.append("--export-http-trace")
     if aiperf.synthesis_max_isl is not None:
         command.extend(["--synthesis-max-isl", str(aiperf.synthesis_max_isl)])
-    if aiperf.synthesis_speedup_ratio is not None:
-        command.extend(["--synthesis-speedup-ratio", str(aiperf.synthesis_speedup_ratio)])
     if aiperf.fixed_schedule_end_offset is not None:
         command.extend(
             ["--fixed-schedule-end-offset", str(aiperf.fixed_schedule_end_offset)]

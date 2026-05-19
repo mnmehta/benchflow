@@ -553,17 +553,6 @@ def _aiperf_benchmark_from_dict(raw: dict[str, Any]) -> AiperfBenchmarkSpec:
         joined = ", ".join(f"spec.aiperf.{field_name}" for field_name in missing)
         raise ValidationError(f"aiperf benchmark profile is missing {joined}")
 
-    synthesis_speedup_ratio_raw = raw.get("synthesis_speedup_ratio")
-    if synthesis_speedup_ratio_raw is not None:
-        try:
-            synthesis_speedup_ratio = float(synthesis_speedup_ratio_raw)
-        except (TypeError, ValueError):
-            raise ValidationError(
-                f"spec.aiperf.synthesis_speedup_ratio must be a number, got {synthesis_speedup_ratio_raw!r}"
-            )
-    else:
-        synthesis_speedup_ratio = None
-
     return AiperfBenchmarkSpec(
         dataset_url=str(raw.get("dataset_url", "") or "").strip(),
         dataset_name=str(raw.get("dataset_name", "") or "").strip(),
@@ -576,16 +565,22 @@ def _aiperf_benchmark_from_dict(raw: dict[str, Any]) -> AiperfBenchmarkSpec:
         fixed_schedule_auto_offset=_as_bool(
             raw.get("fixed_schedule_auto_offset"), True
         ),
+        disable_fixed_schedule=_as_bool(raw.get("disable_fixed_schedule"), False),
         synthesis_max_isl=_optional_positive_int(
             raw.get("synthesis_max_isl"), "spec.aiperf.synthesis_max_isl"
         ),
-        synthesis_speedup_ratio=synthesis_speedup_ratio,
         fixed_schedule_end_offset=_optional_positive_int(
             raw.get("fixed_schedule_end_offset"),
             "spec.aiperf.fixed_schedule_end_offset",
         ),
         dataset_cap=_optional_positive_int(
             raw.get("dataset_cap"), "spec.aiperf.dataset_cap"
+        ),
+        request_rate=_optional_positive_int(
+            raw.get("request_rate"), "spec.aiperf.request_rate"
+        ),
+        concurrency=_optional_positive_int(
+            raw.get("concurrency"), "spec.aiperf.concurrency"
         ),
         export_level=str(raw.get("export_level", "") or "").strip(),
         export_http_trace=_as_bool(raw.get("export_http_trace"), False),
