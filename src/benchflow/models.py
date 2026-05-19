@@ -397,6 +397,7 @@ class AiperfBenchmarkSpec:
     fixed_schedule: bool = True
     fixed_schedule_auto_offset: bool = True
     synthesis_max_isl: int | None = None
+    synthesis_speedup_ratio: float = 10.0
     fixed_schedule_end_offset: int | None = None
     dataset_cap: int | None = None
     export_level: str = ""

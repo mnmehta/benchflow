@@ -283,6 +283,8 @@ def _build_command(
         command.append("--export-http-trace")
     if aiperf.synthesis_max_isl is not None:
         command.extend(["--synthesis-max-isl", str(aiperf.synthesis_max_isl)])
+    if aiperf.synthesis_speedup_ratio is not None:
+        command.extend(["--synthesis-speedup-ratio", str(aiperf.synthesis_speedup_ratio)])
     if aiperf.fixed_schedule_end_offset is not None:
         command.extend(
             ["--fixed-schedule-end-offset", str(aiperf.fixed_schedule_end_offset)]
