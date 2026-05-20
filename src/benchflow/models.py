@@ -400,8 +400,10 @@ class AiperfBenchmarkSpec:
     synthesis_max_isl: int | None = None
     fixed_schedule_end_offset: int | None = None
     dataset_cap: int | None = None
+    request_count: int | None = None
     request_rate: int | None = None
     concurrency: int | None = None
+    use_server_token_count: bool = False
     export_level: str = ""
     export_http_trace: bool = False
     max_seconds: int = 7200

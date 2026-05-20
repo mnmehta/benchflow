@@ -285,6 +285,10 @@ def _build_command(
         command.extend(["--request-rate", str(aiperf.request_rate)])
     if aiperf.concurrency is not None:
         command.extend(["--concurrency", str(aiperf.concurrency)])
+    if aiperf.request_count is not None:
+        command.extend(["--request-count", str(aiperf.request_count)])
+    if aiperf.use_server_token_count:
+        command.append("--use-server-token-count")
     if aiperf.export_level:
         command.extend(["--export-level", aiperf.export_level])
     if aiperf.export_http_trace:

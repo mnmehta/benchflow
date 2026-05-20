@@ -576,12 +576,16 @@ def _aiperf_benchmark_from_dict(raw: dict[str, Any]) -> AiperfBenchmarkSpec:
         dataset_cap=_optional_positive_int(
             raw.get("dataset_cap"), "spec.aiperf.dataset_cap"
         ),
+        request_count=_optional_positive_int(
+            raw.get("request_count"), "spec.aiperf.request_count"
+        ),
         request_rate=_optional_positive_int(
             raw.get("request_rate"), "spec.aiperf.request_rate"
         ),
         concurrency=_optional_positive_int(
             raw.get("concurrency"), "spec.aiperf.concurrency"
         ),
+        use_server_token_count=_as_bool(raw.get("use_server_token_count"), False),
         export_level=str(raw.get("export_level", "") or "").strip(),
         export_http_trace=_as_bool(raw.get("export_http_trace"), False),
         max_seconds=int(raw.get("max_seconds", 7200)),
