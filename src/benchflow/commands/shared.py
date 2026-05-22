@@ -198,6 +198,7 @@ def experiment_from_args(args: argparse.Namespace) -> Experiment:
 
     stages = StageSpec(
         download=base_experiment.spec.stages.download,
+        download_config_only=base_experiment.spec.stages.download_config_only,
         deploy=base_experiment.spec.stages.deploy,
         benchmark=base_experiment.spec.stages.benchmark,
         collect=base_experiment.spec.stages.collect,
@@ -207,6 +208,10 @@ def experiment_from_args(args: argparse.Namespace) -> Experiment:
         override = getattr(args, f"stage_{stage_name}", None)
         if override is not None:
             setattr(stages, stage_name, override)
+
+    # Handle download_config_only override
+    if getattr(args, "stage_download_config_only", False):
+        stages.download_config_only = True
 
     runtime_image = parse_axis_strings(
         getattr(args, "runtime_image", None), "--runtime-image"
@@ -642,6 +647,16 @@ def experiment_input_options(func: Callable[..., object]) -> Callable[..., objec
                 help=f"Enable or disable the {stage_name} stage.",
             )
         )
+    decorators.append(
+        click.option(
+            "--download-config-only",
+            "stage_download_config_only",
+            is_flag=True,
+            default=False,
+            show_default=False,
+            help="Download only config files without model weights (fast testing mode).",
+        )
+    )
     return apply_click_options(decorators)(func)
 
 

@@ -11,7 +11,40 @@ When you only need model configuration files (for testing deployment, tokenizer 
 
 ### Usage
 
-**Command Line:**
+**Method 1: CLI Flag (for `bflow experiment run`)**
+```bash
+bflow experiment run \
+  --model Qwen/Qwen-7B \
+  --deployment-profile llm-d-dummy-weights \
+  --benchmark-profile smoke-test \
+  --download-config-only
+```
+
+**Method 2: Experiment YAML**
+```yaml
+apiVersion: benchflow.io/v1alpha1
+kind: Experiment
+metadata:
+  name: config-only-test
+spec:
+  model: Qwen/Qwen-7B
+  deployment_profile:
+    - llm-d-inference-scheduling
+  benchmark_profile:
+    - concurrent-1k-1k
+  stages:
+    download: true
+    download_config_only: true  # Download only config files
+    deploy: true
+    benchmark: true
+```
+
+Then run:
+```bash
+bflow experiment run experiments/config-only-test.yaml
+```
+
+**Method 3: Direct Model Download Command**
 ```bash
 bflow model download \
   --run-plan-json runplan.json \
@@ -93,6 +126,32 @@ When `use_dummy_weights: true` is set, BenchFlow automatically adds `--load-form
 
 You can combine both features for ultra-fast testing:
 
+**Method 1: CLI Flags**
+```bash
+bflow experiment run \
+  --model meta-llama/Llama-3-70B \
+  --deployment-profile llm-d-dummy-weights \
+  --benchmark-profile load-test \
+  --download-config-only
+```
+
+**Method 2: Experiment YAML**
+```yaml
+apiVersion: benchflow.io/v1alpha1
+kind: Experiment
+metadata:
+  name: ultra-fast-infra-test
+spec:
+  model: meta-llama/Llama-3-70B
+  deployment_profile:
+    - llm-d-dummy-weights  # Profile with use_dummy_weights: true
+  benchmark_profile:
+    - load-test
+  stages:
+    download_config_only: true  # Config files only
+```
+
+**Method 3: Full Example with Separate Steps**
 ```bash
 # 1. Download only config files
 bflow model download \
@@ -108,9 +167,10 @@ bflow experiment run \
 ```
 
 This combination:
-- Downloads only KB/MB of config files (seconds)
-- Starts vLLM with dummy weights (fast initialization)
+- Downloads only KB/MB of config files (seconds, not hours)
+- Starts vLLM with dummy weights (fast initialization, no weight loading)
 - Allows full infrastructure testing without actual model weights
+- Perfect for CI/CD pipelines and rapid iteration
 
 ## Use Cases
 

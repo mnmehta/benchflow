@@ -127,6 +127,7 @@ class ModelSpec:
 @dataclass(slots=True)
 class StageSpec:
     download: bool = True
+    download_config_only: bool = False
     deploy: bool = True
     benchmark: bool = True
     collect: bool = True
@@ -137,6 +138,7 @@ class StageSpec:
         raw = raw or {}
         return cls(
             download=_as_bool(raw.get("download"), True),
+            download_config_only=_as_bool(raw.get("download_config_only"), False),
             deploy=_as_bool(raw.get("deploy"), True),
             benchmark=_as_bool(raw.get("benchmark"), True),
             collect=_as_bool(raw.get("collect"), True),

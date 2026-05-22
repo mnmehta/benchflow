@@ -453,11 +453,13 @@ def cmd_repo_clone(args: argparse.Namespace) -> int:
 
 def cmd_model_download(args: argparse.Namespace) -> int:
     plan = load_runtime_plan(args)
+    # Use --config-only flag if provided, otherwise use plan's stage setting
+    config_only = getattr(args, "config_only", False) or plan.stages.download_config_only
     target_dir = download_cached_model(
         plan,
         context=_execution_context(models_storage_path=args.models_storage_path),
         skip_if_exists=not args.no_skip_if_exists,
-        config_only=getattr(args, "config_only", False),
+        config_only=config_only,
     )
     print(target_dir)
     return 0
