@@ -7,7 +7,9 @@ metadata:
     mode: dummy-weights
 spec:
   # Large model for testing infrastructure without downloading weights
-  model: zai-org/GLM-5.1
+  model:
+    name:
+      - zai-org/GLM-5.1
 
   # Use a deployment profile configured with use_dummy_weights: true
   deployment_profile:
