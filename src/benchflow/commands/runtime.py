@@ -457,6 +457,7 @@ def cmd_model_download(args: argparse.Namespace) -> int:
         plan,
         context=_execution_context(models_storage_path=args.models_storage_path),
         skip_if_exists=not args.no_skip_if_exists,
+        config_only=getattr(args, "config_only", False),
     )
     print(target_dir)
     return 0
@@ -1253,6 +1254,11 @@ def model_group() -> None:
     "--no-skip-if-exists",
     is_flag=True,
     help="Force a download even when the model is already cached.",
+)
+@click.option(
+    "--config-only",
+    is_flag=True,
+    help="Download only config files (no model weights).",
 )
 def model_download(**kwargs: object) -> int:
     return invoke_handler(cmd_model_download, **kwargs)

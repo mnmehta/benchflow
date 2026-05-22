@@ -406,6 +406,7 @@ def _runtime_from_dict(raw: dict[str, Any] | None) -> RuntimeSpec:
         replicas=int(raw.get("replicas", 1)),
         tensor_parallelism=int(raw.get("tensor_parallelism", 1)),
         vllm_args=[str(item) for item in (raw.get("vllm_args") or [])],
+        use_dummy_weights=_as_bool(raw.get("use_dummy_weights"), False),
         env=env,
         node_selector=_string_mapping(
             raw.get("node_selector"), "spec.runtime.node_selector"

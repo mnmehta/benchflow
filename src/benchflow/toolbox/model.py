@@ -12,6 +12,7 @@ def download_cached_model(
     *,
     context: ExecutionContext,
     skip_if_exists: bool = True,
+    config_only: bool = False,
 ) -> Path:
     if plan.target_cluster.enabled():
         run_remote_job(
@@ -25,6 +26,7 @@ def download_cached_model(
                 "--models-storage-path",
                 "/models-storage",
                 *([] if skip_if_exists else ["--no-skip-if-exists"]),
+                *(["--config-only"] if config_only else []),
             ],
             volume_mounts=[
                 {"name": "models-storage", "mountPath": "/models-storage"},
@@ -49,4 +51,5 @@ def download_cached_model(
         plan,
         models_storage_path=context.models_storage_path,
         skip_if_exists=skip_if_exists,
+        config_only=config_only,
     )

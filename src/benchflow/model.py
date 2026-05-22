@@ -44,6 +44,7 @@ def download_model(
     *,
     models_storage_path: Path,
     skip_if_exists: bool = True,
+    config_only: bool = False,
 ) -> Path:
     target_dir = (
         models_storage_path
@@ -52,9 +53,16 @@ def download_model(
     )
     step(f"Preparing model cache for {plan.model.name}")
     detail(f"Target directory: {target_dir}")
-    if skip_if_exists and _has_model_weights(target_dir):
+    if config_only:
+        detail("Config-only mode: will download config files without model weights")
+    if skip_if_exists and _has_model_weights(target_dir) and not config_only:
         success(
             f"Skipping download; cached model weights already exist at {target_dir}"
+        )
+        return target_dir
+    if skip_if_exists and config_only and (target_dir / "config.json").exists():
+        success(
+            f"Skipping download; cached model config already exists at {target_dir}"
         )
         return target_dir
     if target_dir.exists():
@@ -73,7 +81,24 @@ def download_model(
             f"download={os.environ['HF_HUB_DOWNLOAD_TIMEOUT']}s, "
             f"etag={os.environ['HF_HUB_ETAG_TIMEOUT']}s"
         )
-        step(f"Downloading {plan.model.name}")
+        if config_only:
+            step(f"Downloading config files for {plan.model.name}")
+        else:
+            step(f"Downloading {plan.model.name}")
+
+        # Config files to download when config_only is True
+        config_patterns = [
+            "*.json",
+            "*.txt",
+            "*.model",
+            "tokenizer.model",
+            "tokenizer_config.json",
+            "special_tokens_map.json",
+            "vocab.json",
+            "merges.txt",
+            "added_tokens.json",
+            "*.tiktoken",
+        ]
 
         snapshot_download(
             repo_id=plan.model.name,
@@ -83,15 +108,23 @@ def download_model(
             token=os.environ.get("HF_TOKEN"),
             local_dir_use_symlinks=False,
             resume_download=True,
+            allow_patterns=config_patterns if config_only else None,
         )
     except Exception as exc:  # noqa: BLE001
         raise CommandError(
             f"failed to download model {plan.model.name}: {exc}"
         ) from exc
-    if not _has_model_weights(target_dir):
-        raise CommandError(
-            f"download completed but no model weights were found in {target_dir}"
-        )
-    success(f"Downloaded model weights to {target_dir}")
+    if config_only:
+        if not (target_dir / "config.json").exists():
+            raise CommandError(
+                f"download completed but no config.json was found in {target_dir}"
+            )
+        success(f"Downloaded model config files to {target_dir}")
+    else:
+        if not _has_model_weights(target_dir):
+            raise CommandError(
+                f"download completed but no model weights were found in {target_dir}"
+            )
+        success(f"Downloaded model weights to {target_dir}")
 
     return target_dir

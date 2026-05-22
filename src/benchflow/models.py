@@ -310,6 +310,7 @@ class RuntimeSpec:
     replicas: int = 1
     tensor_parallelism: int = 1
     vllm_args: list[str] = field(default_factory=list)
+    use_dummy_weights: bool = False
     env: dict[str, str] = field(default_factory=dict)
     node_selector: dict[str, str] = field(default_factory=dict)
     affinity: dict[str, Any] = field(default_factory=dict)

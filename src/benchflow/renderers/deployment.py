@@ -36,6 +36,16 @@ def _model_path(plan: ResolvedRunPlan) -> str:
     return f"{plan.deployment.model_storage.cache_dir}/{plan.model.pvc_directory_name}"
 
 
+def _get_vllm_args(plan: ResolvedRunPlan) -> list[str]:
+    """Get vLLM args, including --load-format dummy if use_dummy_weights is enabled."""
+    args = list(plan.deployment.runtime.vllm_args)
+    if plan.deployment.runtime.use_dummy_weights:
+        # Add --load-format dummy if not already present
+        if not any("--load-format" in arg for arg in args):
+            args.append("--load-format=dummy")
+    return args
+
+
 def render_llmd_values(plan: ResolvedRunPlan) -> dict[str, Any]:
     return {
         "releaseName": plan.deployment.release_name,
@@ -55,7 +65,7 @@ def render_llmd_values(plan: ResolvedRunPlan) -> dict[str, Any]:
             "image": plan.deployment.runtime.image,
             "replicas": plan.deployment.runtime.replicas,
             "tensorParallelism": plan.deployment.runtime.tensor_parallelism,
-            "vllmArgs": plan.deployment.runtime.vllm_args,
+            "vllmArgs": _get_vllm_args(plan),
             "env": plan.deployment.runtime.env,
             "nodeSelector": plan.deployment.runtime.node_selector,
             "affinity": plan.deployment.runtime.affinity,
@@ -99,7 +109,7 @@ def _rhoai_vllm_args(plan: ResolvedRunPlan) -> list[str]:
         "--enable-ssl-refresh",
         "--ssl-certfile=/var/run/kserve/tls/tls.crt",
         "--ssl-keyfile=/var/run/kserve/tls/tls.key",
-    ] + plan.deployment.runtime.vllm_args
+    ] + _get_vllm_args(plan)
 
 
 def _rhoai_precise_tokenizer_model_path(plan: ResolvedRunPlan) -> str:
@@ -314,7 +324,7 @@ def render_rhaiis_raw_vllm_manifests(plan: ResolvedRunPlan) -> list[dict[str, An
             f"--tensor-parallel-size={plan.deployment.runtime.tensor_parallelism}",
             "--port=8000",
             "--host=0.0.0.0",
-            *plan.deployment.runtime.vllm_args,
+            *_get_vllm_args(plan),
         ],
         "env": _rhaiis_raw_vllm_runtime_env(plan),
         "ports": [{"containerPort": 8000, "name": "http", "protocol": "TCP"}],
