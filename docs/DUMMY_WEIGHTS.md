@@ -221,7 +221,7 @@ bflow experiment run \
 
 ### Example 2: Profile with Dummy Weights
 
-profiles/deployment/llm-d/dummy-weights-dev.yaml:
+Create a deployment profile file at `profiles/deployment/llm-d-dummy-weights-dev.yaml`:
 ```yaml
 apiVersion: benchflow.io/v1alpha1
 kind: DeploymentProfile
@@ -241,6 +241,13 @@ spec:
       - --max-model-len=8192
       - --gpu-memory-utilization=0.95
       - --trust-remote-code
+```
+
+Then reference it in your experiment:
+```yaml
+spec:
+  deployment_profile:
+    - llm-d-dummy-weights-dev
 ```
 
 ### Example 3: Testing Different Scales

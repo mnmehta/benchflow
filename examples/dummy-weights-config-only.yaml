@@ -24,39 +24,12 @@ spec:
     download: true
     download_config_only: true  # Download only config files (KB/MB, not GB/TB)
     deploy: true
-    benchmark: true
-    collect: true
-    cleanup: true
+    benchmark: false
+    collect: false
+    cleanup: false
 
   # Optional: Override runtime settings
   overrides:
     runtime:
       replicas: 1  # Single replica
       tp: 8        # Tensor parallelism 8 for large model
-
----
-# Companion deployment profile with dummy weights enabled
-apiVersion: benchflow.io/v1alpha1
-kind: DeploymentProfile
-metadata:
-  name: llm-d-dummy-weights-dev
-spec:
-  platform: llm-d
-  mode: inference-scheduling
-  repo_url: https://github.com/llm-d/llm-d.git
-  repo_ref: v0.6.0
-  gateway: istio
-  endpoint_path: /v1/models
-  model_storage:
-    pvc_name: models-storage
-    cache_dir: /models
-    mount_path: /model-cache
-  runtime:
-    replicas: 1
-    tensor_parallelism: 8
-    use_dummy_weights: true  # Use random weights for fast startup
-    vllm_args:
-      - --max-model-len=8192
-      - --gpu-memory-utilization=0.95
-      - --trust-remote-code
-      - --enable-prefix-caching

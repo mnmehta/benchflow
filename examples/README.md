@@ -92,10 +92,20 @@ With this configuration, you can validate:
    - Validate cross-region failover
    - No need to sync large model weights
 
+### File Structure
+
+The example uses two files:
+
+1. **Experiment**: `examples/dummy-weights-config-only.yaml`
+2. **Deployment Profile**: `profiles/deployment/llm-d-dummy-weights-dev.yaml`
+
+The deployment profile is stored separately in the `profiles/deployment/` directory and referenced by name in the experiment.
+
 ### Creating Your Own Profile
 
-To create a deployment profile with dummy weights:
+To create a deployment profile with dummy weights, create a file in `profiles/deployment/`:
 
+**profiles/deployment/my-dummy-weights-profile.yaml:**
 ```yaml
 apiVersion: benchflow.io/v1alpha1
 kind: DeploymentProfile
@@ -113,11 +123,18 @@ spec:
 
 Then use it in your experiment:
 
+**experiments/my-test.yaml:**
 ```yaml
+apiVersion: benchflow.io/v1alpha1
+kind: Experiment
+metadata:
+  name: my-test
 spec:
   model: any-model-name  # Model architecture must exist
   deployment_profile:
     - my-dummy-weights-profile
+  benchmark_profile:
+    - concurrent-1k-1k
   stages:
     download_config_only: true  # Config files only
 ```
