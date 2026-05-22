@@ -16,7 +16,7 @@ spec:
     - llm-d-dummy-weights-dev
 
   benchmark_profile:
-    - concurrent-8k-1k
+    - guidellm-concurrent-8k-1k
 
   mlflow:
     experiment: michey-glm
