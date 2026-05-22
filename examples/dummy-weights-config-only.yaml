@@ -1,0 +1,59 @@
+apiVersion: benchflow.io/v1alpha1
+kind: Experiment
+metadata:
+  name: ultra-fast-infra-test
+  labels:
+    purpose: infrastructure-testing
+    mode: dummy-weights
+spec:
+  # Large model for testing infrastructure without downloading weights
+  model: meta-llama/Llama-3-70B
+
+  # Use a deployment profile configured with use_dummy_weights: true
+  deployment_profile:
+    - llm-d-dummy-weights-dev
+
+  benchmark_profile:
+    - concurrent-8k-1k
+
+  # Stage configuration
+  stages:
+    download: true
+    download_config_only: true  # Download only config files (KB/MB, not GB/TB)
+    deploy: true
+    benchmark: true
+    collect: true
+    cleanup: true
+
+  # Optional: Override runtime settings
+  overrides:
+    runtime:
+      replicas: 8  # Test with multiple replicas
+      tp: 2        # Test with tensor parallelism
+
+---
+# Companion deployment profile with dummy weights enabled
+apiVersion: benchflow.io/v1alpha1
+kind: DeploymentProfile
+metadata:
+  name: llm-d-dummy-weights-dev
+spec:
+  platform: llm-d
+  mode: inference-scheduling
+  repo_url: https://github.com/llm-d/llm-d.git
+  repo_ref: v0.6.0
+  gateway: istio
+  endpoint_path: /v1/models
+  model_storage:
+    pvc_name: models-storage
+    cache_dir: /models
+    mount_path: /model-cache
+  runtime:
+    replicas: 4
+    tensor_parallelism: 2
+    use_dummy_weights: true  # Use random weights for fast startup
+    vllm_args:
+      - --max-model-len=8192
+      - --gpu-memory-utilization=0.95
+      - --trust-remote-code
+      - --enable-prefix-caching
