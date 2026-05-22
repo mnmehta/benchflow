@@ -1,7 +1,7 @@
 apiVersion: benchflow.io/v1alpha1
 kind: Experiment
 metadata:
-  name: ultra-fast-infra-test
+  name: glm-5.1-dummy-weights
   labels:
     purpose: infrastructure-testing
     mode: dummy-weights
