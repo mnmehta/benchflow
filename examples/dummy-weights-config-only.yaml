@@ -16,6 +16,9 @@ spec:
   benchmark_profile:
     - concurrent-8k-1k
 
+  mlflow:
+    experiment: michey-glm
+
   # Stage configuration
   stages:
     download: true
