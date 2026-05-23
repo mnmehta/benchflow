@@ -77,6 +77,7 @@ def _resolved_stage_spec(experiment: Experiment) -> StageSpec:
     # Default behavior: skip deployment when target is specified
     return StageSpec(
         download=False,
+        download_config_only=experiment.spec.stages.download_config_only,
         deploy=False,
         benchmark=experiment.spec.stages.benchmark,
         collect=bool(str(experiment.spec.target.metrics_release_name or "").strip()),
@@ -313,6 +314,7 @@ def resolve_run_plan(
             deployment_args=deployment_profile.spec.runtime.vllm_args,
             benchmark_min_max_model_len=benchmark_profile.spec.requirements.min_max_model_len,
         ),
+        use_dummy_weights=deployment_profile.spec.runtime.use_dummy_weights,
         env={
             **deployment_profile.spec.runtime.env,
             **experiment.spec.overrides.runtime.env,

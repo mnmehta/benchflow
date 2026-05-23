@@ -9,7 +9,7 @@ spec:
   # Large model for testing infrastructure without downloading weights
   model:
     name:
-      - zai-org/GLM-5.1
+      - zai-org/GLM-5.1-FP8
 
   # Use a deployment profile configured with use_dummy_weights: true
   deployment_profile:

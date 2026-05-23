@@ -14,9 +14,14 @@ spec:
     cache_dir: /models
     mount_path: /model-cache
   runtime:
+    image: vllm/vllm-openai:glm51
     replicas: 1
     tensor_parallelism: 8
     use_dummy_weights: true  # Use random weights for fast startup
+    env:
+      HOME: /tmp  # Set HOME so TensorRT-LLM uses /tmp/.tensorrt_llm instead of /.tensorrt_llm
+      TRITON_CACHE_DIR: /tmp/.triton
+      VLLM_CACHE_ROOT: /tmp/.vllm_cache
     vllm_args:
       - --trust-remote-code
       - --enable-prefix-caching
