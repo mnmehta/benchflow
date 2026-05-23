@@ -26,6 +26,7 @@ from ..platform_state import (
     persist_cluster_platform_state,
     setup_key_for_plan,
 )
+from ..renderers.deployment import _get_vllm_args
 from ..repository import clone_repo
 from ..ui import detail, step, success
 
@@ -443,7 +444,7 @@ def _patch_values(plan: ResolvedRunPlan, values_file: Path) -> dict[str, Any]:
             *preserved_args,
             "--kv-events-config",
             json.dumps(kv_events_config, separators=(",", ":")),
-            *runtime.vllm_args,
+            *_get_vllm_args(plan),
         ]
         container["modelCommand"] = "custom"
         container["command"] = ["vllm", "serve"]
@@ -460,7 +461,7 @@ def _patch_values(plan: ResolvedRunPlan, values_file: Path) -> dict[str, Any]:
             str(runtime.tensor_parallelism),
             "--served-model-name",
             plan.model.name,
-            *runtime.vllm_args,
+            *_get_vllm_args(plan),
         ]
         container["args"] = args
 

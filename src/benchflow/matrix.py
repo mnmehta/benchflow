@@ -181,6 +181,7 @@ def expand_experiment_matrix(experiment: Experiment) -> list[Experiment]:
                     ttl_seconds_after_finished=experiment.spec.ttl_seconds_after_finished,
                     stages=StageSpec(
                         download=experiment.spec.stages.download,
+                        download_config_only=experiment.spec.stages.download_config_only,
                         deploy=experiment.spec.stages.deploy,
                         benchmark=experiment.spec.stages.benchmark,
                         collect=experiment.spec.stages.collect,

@@ -1,0 +1,37 @@
+apiVersion: benchflow.io/v1alpha1
+kind: Experiment
+metadata:
+  name: glm-5.1-dummy-weights
+  labels:
+    purpose: infrastructure-testing
+    mode: dummy-weights
+spec:
+  # Large model for testing infrastructure without downloading weights
+  model:
+    name:
+      - zai-org/GLM-5.1-FP8
+
+  # Use a deployment profile configured with use_dummy_weights: true
+  deployment_profile:
+    - llm-d-dummy-weights-dev
+
+  benchmark_profile:
+    - guidellm-concurrent-8k-1k
+
+  mlflow:
+    experiment: michey-glm
+
+  # Stage configuration
+  stages:
+    download: true
+    download_config_only: true  # Download only config files (KB/MB, not GB/TB)
+    deploy: true
+    benchmark: false
+    collect: false
+    cleanup: false
+
+  # Optional: Override runtime settings
+  overrides:
+    runtime:
+      replicas: 1  # Single replica
+      tp: 8        # Tensor parallelism 8 for large model
