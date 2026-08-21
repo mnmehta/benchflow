@@ -92,10 +92,16 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         container = pod_spec["containers"][0]
         self.assertEqual(container["command"], ["/bin/sh", "-c"])
         self.assertIn("${POD_NAME##*-}", container["args"][0])
-        self.assertIn("--data-parallel-address=\"${POD_IP}\"", container["args"][0])
+        self.assertIn("--data-parallel-start-rank=\"${node_rank}\"", container["args"][0])
+        self.assertIn('--data-parallel-address="${dp_addr}"', container["args"][0])
         self.assertIn("--headless", container["args"][0])
-        self.assertIn("--nnodes=4", container["args"])
-        self.assertIn("--master-port=29500", container["args"])
+        self.assertIn("getent ahostsv4", container["args"][0])
+        self.assertNotIn("--nnodes=", " ".join(str(a) for a in container["args"]))
+        self.assertNotIn("--node-rank=", " ".join(str(a) for a in container["args"]))
+        self.assertNotIn("--master-addr=", " ".join(str(a) for a in container["args"]))
+        self.assertIn("--data-parallel-size-local=1", container["args"])
+        self.assertIn("--data-parallel-rpc-port=29500", container["args"])
+        self.assertIn("--data-parallel-external-lb", container["args"])
         self.assertIn("--model=/models/Kimi-K3", container["args"])
         env_by_name = {item["name"]: item for item in container["env"]}
         self.assertEqual(
@@ -106,6 +112,7 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
             env_by_name["POD_IP"]["valueFrom"]["fieldRef"]["fieldPath"],
             "status.podIP",
         )
+        self.assertIn(workload_name + "-0.", env_by_name["DP_LEADER_HOST"]["value"])
         self.assertNotIn(
             "model-storage", {volume["name"] for volume in pod_spec["volumes"]}
         )

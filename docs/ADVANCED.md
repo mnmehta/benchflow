@@ -582,7 +582,7 @@ spec:
     model_path: /models # rhaiis raw-vllm only; uses a runtime hostPath instead of model_storage PVC
     distributed: # rhaiis raw-vllm only
       enabled: true # render one ranked multi-node StatefulSet instead of independent Deployment replicas
-      master_port: 29500
+      master_port: 29500 # maps to --data-parallel-rpc-port on stock vLLM 0.27+
       host_network: true
       host_ipc: true
 ```
@@ -688,15 +688,20 @@ same path on every selected node. Each node still has isolated hostPath contents
 BenchFlow does not synchronize them.
 
 RHAIIS raw-vLLM profiles can use `spec.options.distributed.enabled` for one
-multi-node vLLM process group. BenchFlow renders a parallel-start `StatefulSet`,
-a headless rendezvous Service, and a stable API Service that resolves only to
-ordinal zero. The StatefulSet ordinal (from `metadata.name` / `POD_NAME`, not
-`HOSTNAME`) becomes `--node-rank`; ordinal zero serves the OpenAI API and every
-other ordinal receives `--headless`. Each rank also passes
-`--data-parallel-address` as its own `status.podIP` so ZMQ/DP sockets bind
-locally. BenchFlow owns `--nnodes`, `--node-rank`, `--master-addr`,
-`--master-port`, and `--data-parallel-address`; the profile owns the parallel
-strategy, such as `--data-parallel-size` and `--enable-expert-parallel`.
+multi-node vLLM process group against **stock vLLM 0.27+**. BenchFlow renders a
+parallel-start `StatefulSet`, a headless rendezvous Service, and a stable API
+Service that resolves only to ordinal zero. The StatefulSet ordinal (from
+`metadata.name` / `POD_NAME`, not `HOSTNAME`) becomes
+`--data-parallel-start-rank`; ordinal zero serves the OpenAI API and every other
+ordinal receives `--headless`. BenchFlow injects
+`--data-parallel-size-local=1`, `--data-parallel-rpc-port` (from
+`distributed.master_port`), `--data-parallel-external-lb`, and
+`--data-parallel-address` (rank 0 = `status.podIP`; workers = resolved IP of the
+headless `…-0` DNS name). The profile owns the parallel strategy, such as
+`--data-parallel-size` and `--enable-expert-parallel`. Do **not** pass
+IX-style `--nnodes` / `--node-rank` / `--master-addr` for this path — stock
+vLLM treats that as internal DPLB and aborts on `dp_rank > 0`. See
+[vLLM 0.27.1 vs older IX/nnodes DP launch](vllm-0.27.1-vs-older-ix-agg-dp.md).
 
 Distributed raw-vLLM requires an absolute `spec.options.model_path` inside one
 of `spec.runtime.host_paths`, and at least two runtime replicas. BenchFlow adds
