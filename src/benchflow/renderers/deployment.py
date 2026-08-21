@@ -849,15 +849,15 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
     metrics_target = {"benchflow.io/metrics-target": plan.deployment.release_name}
 
     container_spec = _rhaiis_raw_vllm_container(plan)
-    # Stock vLLM 0.27+ multi-node DP: one DP engine per StatefulSet pod
-    # (size-local=1), external LB, and no IX-style --nnodes/--node-rank/
-    # --master-addr. Profile still owns --data-parallel-size and EP flags.
+    # Stock vLLM 0.27+ multi-node MoE DP (external LB / one pod per rank):
+    # --data-parallel-rank (not --data-parallel-start-rank; that is for
+    # hybrid/internal multi-engine-per-node). Passing rank also implies
+    # external LB. No IX-style --nnodes/--node-rank/--master-addr.
+    # Profile still owns --data-parallel-size and EP flags.
     base_argv = [
         *container_spec.pop("command"),
         *container_spec.pop("args"),
-        "--data-parallel-size-local=1",
         f"--data-parallel-rpc-port={rpc_port}",
-        "--data-parallel-external-lb",
     ]
     # Under hostNetwork HOSTNAME is the node name (e.g. gf2a612), so do not
     # derive the StatefulSet ordinal from it. metadata.name stays
@@ -901,10 +901,10 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             "  fi\n"
             "fi\n"
             'if [ "${node_rank}" = "0" ]; then\n'
-            '  exec "$@" --data-parallel-start-rank="${node_rank}" '
+            '  exec "$@" --data-parallel-rank="${node_rank}" '
             '--data-parallel-address="${dp_addr}"\n'
             "fi\n"
-            'exec "$@" --data-parallel-start-rank="${node_rank}" '
+            'exec "$@" --data-parallel-rank="${node_rank}" '
             '--data-parallel-address="${dp_addr}" --headless\n'
         ),
         "benchflow-vllm",

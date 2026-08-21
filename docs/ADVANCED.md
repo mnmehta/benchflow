@@ -691,16 +691,16 @@ RHAIIS raw-vLLM profiles can use `spec.options.distributed.enabled` for one
 multi-node vLLM process group against **stock vLLM 0.27+**. BenchFlow renders a
 parallel-start `StatefulSet`, a headless rendezvous Service, and a stable API
 Service that resolves only to ordinal zero. The StatefulSet ordinal (from
-`metadata.name` / `POD_NAME`, not `HOSTNAME`) becomes
-`--data-parallel-start-rank`; ordinal zero serves the OpenAI API and every other
-ordinal receives `--headless`. BenchFlow injects
-`--data-parallel-size-local=1`, `--data-parallel-rpc-port` (from
-`distributed.master_port`), `--data-parallel-external-lb`, and
-`--data-parallel-address` (rank 0 = `status.podIP`; workers = resolved IP of the
-headless `…-0` DNS name). The profile owns the parallel strategy, such as
-`--data-parallel-size` and `--enable-expert-parallel`. Do **not** pass
-IX-style `--nnodes` / `--node-rank` / `--master-addr` for this path — stock
-vLLM treats that as internal DPLB and aborts on `dp_rank > 0`. See
+`metadata.name` / `POD_NAME`, not `HOSTNAME`) becomes `--data-parallel-rank`
+(external / one-pod-per-rank MoE DP; this also implies external LB). Ordinal
+zero serves the OpenAI API and every other ordinal receives `--headless`.
+BenchFlow injects `--data-parallel-rpc-port` (from `distributed.master_port`)
+and `--data-parallel-address` (rank 0 = `status.podIP`; workers = resolved IP
+of the headless `…-0` DNS name). The profile owns the parallel strategy, such
+as `--data-parallel-size` and `--enable-expert-parallel`. Do **not** pass
+IX-style `--nnodes` / `--node-rank` / `--master-addr`, and do **not** use
+`--data-parallel-start-rank` here (that flag is for hybrid/internal
+multi-engine-per-node). See
 [vLLM 0.27.1 vs older IX/nnodes DP launch](vllm-0.27.1-vs-older-ix-agg-dp.md).
 
 Distributed raw-vLLM requires an absolute `spec.options.model_path` inside one

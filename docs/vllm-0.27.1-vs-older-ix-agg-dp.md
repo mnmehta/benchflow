@@ -21,14 +21,14 @@ Stock 0.27.1 treats “`--data-parallel-size` without an external LB / DP CLI la
 
 | Concern | Older kimi-k3 / IX_AGG path | Stock vLLM 0.27.1 (BenchFlow now) |
 |---|---|---|
-| Node membership | `--nnodes=N` | Implied by `--data-parallel-size` + per-node `--data-parallel-size-local` |
-| This pod’s DP rank | `--node-rank=R` | `--data-parallel-start-rank=R` |
+| Node membership | `--nnodes=N` | `--data-parallel-size` (global) |
+| This pod’s DP rank | `--node-rank=R` | **`--data-parallel-rank=R`** (one pod per rank) |
 | Rendezvous host | `--master-addr=<leader DNS/IP>` | `--data-parallel-address=<leader IP>` |
 | Rendezvous port | `--master-port=…` (torch-style) | `--data-parallel-rpc-port=…` |
-| Worker role | `--headless` on `node_rank > 0` | `--headless` on `start_rank > 0` (same idea) |
-| Load balancing | Often internal / recipe-managed | **`--data-parallel-external-lb` required** for multi-node engines |
-| Local engines per node | Implicit (1 process / node) | Explicit `--data-parallel-size-local=1` |
-| Typical failure if mixed | Recipe may accept hybrid argv | Workers assert on “internal DPLB” |
+| Worker role | `--headless` on `node_rank > 0` | `--headless` on `dp_rank > 0` |
+| Load balancing | Often internal / recipe-managed | External LB (implied by `--data-parallel-rank`) |
+| Not used here | — | `--data-parallel-start-rank` / `--data-parallel-size-local` (hybrid/internal multi-engine-per-node) |
+| Typical failure if mixed | Recipe may accept hybrid argv | Internal DPLB assert, or `external-lb requires a data-parallel rank` if rank is missing |
 
 ## Concrete argv shapes
 
@@ -52,26 +52,22 @@ vllm serve … \
 # Rank 0
 vllm serve … \
   --data-parallel-size=4 \
-  --data-parallel-size-local=1 \
-  --data-parallel-start-rank=0 \
+  --data-parallel-rank=0 \
   --data-parallel-address="${POD_IP}" \
   --data-parallel-rpc-port=29500 \
-  --data-parallel-external-lb \
   --enable-expert-parallel …
 
 # Rank R > 0
 vllm serve … \
   --data-parallel-size=4 \
-  --data-parallel-size-local=1 \
-  --data-parallel-start-rank="${R}" \
+  --data-parallel-rank="${R}" \
   --data-parallel-address="${LEADER_IP}" \
   --data-parallel-rpc-port=29500 \
-  --data-parallel-external-lb \
   --headless \
   --enable-expert-parallel …
 ```
 
-Profile still owns `--data-parallel-size`, EP, model, and serving flags. BenchFlow owns ordinal → start-rank, size-local, RPC port (`distributed.master_port`), external LB, address resolution, and `--headless`.
+Profile still owns `--data-parallel-size`, EP, model, and serving flags. BenchFlow owns ordinal → `--data-parallel-rank`, RPC port (`distributed.master_port`), address resolution, and `--headless`.
 
 ## Address / networking notes
 
