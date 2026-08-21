@@ -690,19 +690,24 @@ BenchFlow does not synchronize them.
 RHAIIS raw-vLLM profiles can use `spec.options.distributed.enabled` for one
 multi-node vLLM process group. BenchFlow renders a parallel-start `StatefulSet`,
 a headless rendezvous Service, and a stable API Service that resolves only to
-ordinal zero. The pod ordinal becomes `--node-rank`; ordinal zero serves the
-OpenAI API and every other ordinal receives `--headless`. BenchFlow owns
-`--nnodes`, `--node-rank`, `--master-addr`, and `--master-port`; the profile owns
-the parallel strategy, such as `--data-parallel-size` and
-`--enable-expert-parallel`.
+ordinal zero. The StatefulSet ordinal (from `metadata.name` / `POD_NAME`, not
+`HOSTNAME`) becomes `--node-rank`; ordinal zero serves the OpenAI API and every
+other ordinal receives `--headless`. Each rank also passes
+`--data-parallel-address` as its own `status.podIP` so ZMQ/DP sockets bind
+locally. BenchFlow owns `--nnodes`, `--node-rank`, `--master-addr`,
+`--master-port`, and `--data-parallel-address`; the profile owns the parallel
+strategy, such as `--data-parallel-size` and `--enable-expert-parallel`.
 
 Distributed raw-vLLM requires an absolute `spec.options.model_path` inside one
 of `spec.runtime.host_paths`, and at least two runtime replicas. BenchFlow adds
 required pod anti-affinity so each rank lands on a different Kubernetes node.
 When `host_network` is enabled it also sets `ClusterFirstWithHostNet` so the
-rank-zero rendezvous name remains resolvable. On OpenShift, profiles using these
+rank-zero rendezvous name remains resolvable, and `HOSTNAME` is the node name —
+which is why rank must come from `POD_NAME`. On OpenShift, profiles using these
 host features must select the bootstrap-managed `benchflow-hostpath-runtime`
-service account. Its SCC allows hostPath, host networking, and host IPC.
+service account. Its SCC allows hostPath, host networking, and host IPC. Only
+one hostNetwork vLLM pod can claim the serve/rendezvous ports per node; clean
+up leftover releases before redeploying.
 
 The characterized Kimi-K3 TP8 x DP4 x EP32 deployment is available as:
 

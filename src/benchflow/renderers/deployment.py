@@ -854,9 +854,39 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
         f"--master-addr={leader_host}",
         f"--master-port={master_port}",
     ]
+    # Under hostNetwork HOSTNAME is the node name (e.g. gf2a612), so do not
+    # derive the StatefulSet ordinal from it. metadata.name stays
+    # <sts>-<ordinal> either way. POD_IP is the local address for DP/ZMQ bind
+    # (pod IP == node IP when hostNetwork is enabled).
+    container_env = list(container_spec.get("env") or [])
+    container_env.extend(
+        [
+            {
+                "name": "POD_NAME",
+                "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}},
+            },
+            {
+                "name": "POD_IP",
+                "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}},
+            },
+        ]
+    )
+    container_spec["env"] = container_env
     container_spec["command"] = ["/bin/sh", "-c"]
     container_spec["args"] = [
-        """node_rank=${HOSTNAME##*-}\nif [ \"${node_rank}\" = \"0\" ]; then\n  exec \"$@\" --node-rank=\"${node_rank}\"\nfi\nexec \"$@\" --node-rank=\"${node_rank}\" --headless\n""",
+        (
+            'node_rank=${POD_NAME##*-}\n'
+            'if [ -z "${POD_IP}" ]; then\n'
+            '  echo "POD_IP is empty; cannot set --data-parallel-address" >&2\n'
+            "  exit 1\n"
+            "fi\n"
+            'if [ "${node_rank}" = "0" ]; then\n'
+            '  exec "$@" --node-rank="${node_rank}" '
+            '--data-parallel-address="${POD_IP}"\n'
+            "fi\n"
+            'exec "$@" --node-rank="${node_rank}" '
+            '--data-parallel-address="${POD_IP}" --headless\n'
+        ),
         "benchflow-vllm",
         *base_argv,
     ]
@@ -868,7 +898,13 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             "command": [
                 "/bin/sh",
                 "-c",
-                """node_rank=${HOSTNAME##*-}; if [ \"${node_rank}\" != \"0\" ]; then kill -0 1; else python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\"; fi""",
+                (
+                    'node_rank=${POD_NAME##*-}; '
+                    'if [ "${node_rank}" != "0" ]; then kill -0 1; else '
+                    'python3 -c "import urllib.request; '
+                    "urllib.request.urlopen('http://127.0.0.1:8000/health', "
+                    'timeout=3)"; fi'
+                ),
             ]
         },
         "periodSeconds": 10,

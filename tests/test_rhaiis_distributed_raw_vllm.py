@@ -49,8 +49,10 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
             plan.deployment.runtime.service_account_name,
             "benchflow-hostpath-runtime",
         )
-        self.assertEqual(plan.deployment.options["model_path"], "/models")
+        self.assertEqual(plan.deployment.options["model_path"], "/models/Kimi-K3")
         self.assertTrue(plan.deployment.options["distributed"]["enabled"])
+        self.assertTrue(plan.deployment.options["distributed"]["host_network"])
+        self.assertTrue(plan.deployment.options["distributed"]["host_ipc"])
         self.assertIn("--data-parallel-size=4", plan.deployment.runtime.vllm_args)
         self.assertIn("--enable-expert-parallel", plan.deployment.runtime.vllm_args)
         self.assertIn("--max-model-len=1048576", plan.deployment.runtime.vllm_args)
@@ -89,16 +91,29 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
 
         container = pod_spec["containers"][0]
         self.assertEqual(container["command"], ["/bin/sh", "-c"])
-        self.assertIn("${HOSTNAME##*-}", container["args"][0])
+        self.assertIn("${POD_NAME##*-}", container["args"][0])
+        self.assertIn("--data-parallel-address=\"${POD_IP}\"", container["args"][0])
         self.assertIn("--headless", container["args"][0])
         self.assertIn("--nnodes=4", container["args"])
         self.assertIn("--master-port=29500", container["args"])
-        self.assertIn("--model=/models", container["args"])
+        self.assertIn("--model=/models/Kimi-K3", container["args"])
+        env_by_name = {item["name"]: item for item in container["env"]}
+        self.assertEqual(
+            env_by_name["POD_NAME"]["valueFrom"]["fieldRef"]["fieldPath"],
+            "metadata.name",
+        )
+        self.assertEqual(
+            env_by_name["POD_IP"]["valueFrom"]["fieldRef"]["fieldPath"],
+            "status.podIP",
+        )
         self.assertNotIn(
             "model-storage", {volume["name"] for volume in pod_spec["volumes"]}
         )
         self.assertEqual(container["resources"]["limits"]["nvidia.com/gpu"], "8")
         self.assertEqual(container["resources"]["limits"]["rdma/ib"], "1")
+        readiness = container["readinessProbe"]["exec"]["command"][-1]
+        self.assertIn("${POD_NAME##*-}", readiness)
+        self.assertNotIn("${HOSTNAME##*-}", readiness)
 
         headless = by_kind_name[("Service", headless_name)]
         self.assertEqual(headless["spec"]["clusterIP"], "None")

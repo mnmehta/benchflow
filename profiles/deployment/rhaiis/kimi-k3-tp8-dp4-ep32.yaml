@@ -76,5 +76,7 @@ spec:
     distributed:
       enabled: true
       master_port: 29500
-      #host_network: true
-      #host_ipc: true
+      # Required for multi-node NCCL/ZMQ (same as kimi-k3 vllm-recipe STS).
+      # Rank comes from POD_NAME (StatefulSet ordinal), not HOSTNAME.
+      host_network: true
+      host_ipc: true
