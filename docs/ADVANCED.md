@@ -640,13 +640,19 @@ Do not grant hostPath SCC access to the namespace `default` service account
 unless the whole namespace is intentionally trusted for host filesystem access.
 
 For llm-d writable hostPaths on OpenShift, rerun `bflow bootstrap` to create the
-dedicated runtime ServiceAccount and SCC. The node configuration owns the complete
-host path: it must mount the filesystem, create the directory with mode `1777`, and
-label it `container_file_t:s0` before deployment. BenchFlow mounts that directory
-once in the non-root vLLM container and does not relabel it per pod; relabeling a
-shared path races between replicas and triggers `MultipleSELinuxLabels` warnings.
-The service account is used only for SCC admission and its API token is not mounted.
-Do not set `service_account_name`, `fs_group`, or `supplemental_groups` for this path.
+dedicated runtime ServiceAccount and SCC. On non-OpenShift clusters (for example
+CKS), bootstrap skips the `SecurityContextConstraints` and SCC-use RBAC objects
+when the `securitycontextconstraints.security.openshift.io` CRD is absent and
+still creates the `benchflow-hostpath-runtime` ServiceAccount. Managed hostPath
+SCC admission is OpenShift-only at deploy time (it requires
+`openshift.io/sa.scc.*` namespace annotations). The node configuration owns the
+complete host path: it must mount the filesystem, create the directory with mode
+`1777`, and label it `container_file_t:s0` before deployment. BenchFlow mounts
+that directory once in the non-root vLLM container and does not relabel it per
+pod; relabeling a shared path races between replicas and triggers
+`MultipleSELinuxLabels` warnings. The service account is used only for SCC
+admission and its API token is not mounted. Do not set `service_account_name`,
+`fs_group`, or `supplemental_groups` for this path.
 
 Upstream recipe-layout `llm-d` profiles can opt into BenchFlow-managed shared
 storage offloading with `spec.options.storage_offloading`. When present,
@@ -1727,8 +1733,13 @@ RunPlan resolution.
 
 BenchFlow currently assumes:
 
-- OpenShift
-- cluster monitoring is available
+- OpenShift by default for monitoring/Route/SCC integrations; on plain
+  Kubernetes (for example CKS) bootstrap skips OpenShift-only objects when the
+  matching CRDs/ClusterRoles are absent (`SecurityContextConstraints`,
+  `cluster-monitoring-view`, `openshift-monitoring`, OpenShift Routes)
+- cluster monitoring is available on OpenShift (`cluster-monitoring-view` /
+  Thanos querier); on CKS use the in-cluster Prometheus Service instead when
+  configuring metrics (`prometheus_url`)
 - MLflow is reachable
 - MLflow artifacts are backed by S3
 - a suitable storage class exists for the BenchFlow PVCs
