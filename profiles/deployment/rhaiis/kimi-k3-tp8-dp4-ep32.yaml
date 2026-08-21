@@ -7,7 +7,7 @@ spec:
   mode: raw-vllm
   endpoint_path: /v1/models
   runtime:
-    image: vllm/vllm-openai:kimi-k3
+    image: vllm/vllm-openai:v0.27.1
     service_account_name: benchflow-hostpath-runtime
     replicas: 4
     tensor_parallelism: 8
@@ -50,7 +50,7 @@ spec:
       TRANSFORMERS_OFFLINE: "1"
     vllm_args:
       - --data-parallel-size=4
-      - --data-parallel-backend=mp
+      #- --data-parallel-backend=mp
       - --enable-expert-parallel
       - --gpu-memory-utilization=0.95
       - --max-model-len=1048576
@@ -64,16 +64,17 @@ spec:
       - --language-model-only
       - --no-async-scheduling
       - --disable-custom-all-reduce
+      - --trust-remote-code
       - --enable-auto-tool-choice
       - --tool-call-parser=kimi_k3
       - --reasoning-parser=kimi_k3
       - >-
-        --speculative-config={"method":"dspark","model":"Inferact/Kimi-K3-DSpark","num_speculative_tokens":2,"draft_sample_method":"probabilistic","rejection_sample_method":"synthetic","synthetic_acceptance_length":2.51}
+        --speculative-config={"method":"dspark","model":"/models/Kimi-K3-DSpark","num_speculative_tokens":2,"draft_sample_method":"probabilistic","rejection_sample_method":"synthetic","synthetic_acceptance_length":2.51}
   options:
     # /mnt/local/kimi-k3/models is mounted at /models on every selected node.
-    model_path: /models
+    model_path: /models/Kimi-K3
     distributed:
       enabled: true
       master_port: 29500
-      host_network: true
-      host_ipc: true
+      #host_network: true
+      #host_ipc: true
