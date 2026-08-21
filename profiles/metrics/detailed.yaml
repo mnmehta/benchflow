@@ -3,7 +3,7 @@ kind: MetricsProfile
 metadata:
   name: detailed
 spec:
-  prometheus_url: https://thanos-querier.openshift-monitoring.svc:9091
+  prometheus_url: http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090
   query_step: 15s
   query_timeout: 30s
   verify_tls: false

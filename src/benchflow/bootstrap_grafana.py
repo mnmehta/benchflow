@@ -7,6 +7,49 @@ from typing import Any
 from .cluster import CommandError
 from .ui import detail, step, success
 
+OPENSHIFT_ROUTE_CRD = "routes.route.openshift.io"
+OPENSHIFT_CLUSTER_MONITORING_VIEW_ROLE = "cluster-monitoring-view"
+
+
+def select_grafana_rbac_documents(
+    documents: list[dict[str, Any]],
+    *,
+    openshift_routes_available: bool,
+    openshift_cluster_monitoring_available: bool,
+) -> list[dict[str, Any]]:
+    """Drop OpenShift-only Grafana RBAC objects on plain Kubernetes clusters."""
+    selected: list[dict[str, Any]] = []
+    for document in documents:
+        kind = str(document.get("kind") or "")
+        name = str((document.get("metadata") or {}).get("name") or "")
+        role_ref_name = str((document.get("roleRef") or {}).get("name") or "")
+        api_version = str(document.get("apiVersion") or "")
+
+        if not openshift_routes_available and (
+            kind == "Route"
+            or "route.openshift.io" in api_version
+            or name == "benchflow-grafana-route-reader"
+            or (
+                kind in {"Role", "RoleBinding"}
+                and any(
+                    "route.openshift.io" in str(rule.get("apiGroups") or [])
+                    for rule in (document.get("rules") or [])
+                    if isinstance(rule, dict)
+                )
+            )
+        ):
+            continue
+
+        if (
+            not openshift_cluster_monitoring_available
+            and kind == "ClusterRoleBinding"
+            and role_ref_name == OPENSHIFT_CLUSTER_MONITORING_VIEW_ROLE
+        ):
+            continue
+
+        selected.append(document)
+    return selected
+
 
 def install_grafana_if_needed(installer: Any) -> None:
     if not installer.options.install_grafana:
@@ -80,12 +123,37 @@ def apply_grafana_stack(installer: Any) -> None:
     if not installer.options.install_grafana:
         return
 
+    openshift_routes_available = installer._resource_exists(
+        "get", "crd", OPENSHIFT_ROUTE_CRD
+    )
+    openshift_cluster_monitoring_available = installer._resource_exists(
+        "get", "clusterrole", OPENSHIFT_CLUSTER_MONITORING_VIEW_ROLE
+    )
+
     step("Applying Grafana monitoring RBAC")
-    installer._apply_asset_documents(
-        "operators/grafana/rbac.yaml",
+    grafana_rbac = select_grafana_rbac_documents(
+        installer._render_asset_documents(
+            "operators/grafana/rbac.yaml",
+            installer._base_asset_variables(),
+        ),
+        openshift_routes_available=openshift_routes_available,
+        openshift_cluster_monitoring_available=openshift_cluster_monitoring_available,
+    )
+    if not openshift_cluster_monitoring_available:
+        detail(
+            f"Skipping Grafana ClusterRoleBinding to {OPENSHIFT_CLUSTER_MONITORING_VIEW_ROLE} "
+            "because that ClusterRole is not present"
+        )
+    if not openshift_routes_available:
+        detail(
+            f"Skipping OpenShift Route RBAC because CRD {OPENSHIFT_ROUTE_CRD} is not present"
+        )
+    if not grafana_rbac:
+        raise CommandError("no Grafana RBAC manifests remained after platform filtering")
+    installer._apply_documents(
+        grafana_rbac,
         namespace=None,
         description="applying Grafana service account resources",
-        variables=installer._base_asset_variables(),
     )
     installer._wait_for_secret_key(
         name=installer.grafana_datasource_token_secret,
@@ -124,33 +192,45 @@ def apply_grafana_stack(installer: Any) -> None:
             "operators/grafana/benchflow-live-dashboard.json"
         ),
     }
-    installer._apply_documents(
-        [
-            *installer._render_asset_documents(
-                "operators/grafana/provisioning-configmap.yaml",
-                grafana_stack_variables,
-            ),
-            *installer._render_asset_documents(
-                "operators/grafana/dashboards-configmap.yaml",
-                grafana_stack_variables,
-            ),
-            *installer._render_asset_documents(
-                "operators/grafana/deployment.yaml",
-                grafana_stack_variables,
-            ),
-            *installer._render_asset_documents(
-                "operators/grafana/service.yaml",
-                grafana_stack_variables,
-            ),
-            *installer._render_asset_documents(
+    stack_documents = [
+        *installer._render_asset_documents(
+            "operators/grafana/provisioning-configmap.yaml",
+            grafana_stack_variables,
+        ),
+        *installer._render_asset_documents(
+            "operators/grafana/dashboards-configmap.yaml",
+            grafana_stack_variables,
+        ),
+        *installer._render_asset_documents(
+            "operators/grafana/deployment.yaml",
+            grafana_stack_variables,
+        ),
+        *installer._render_asset_documents(
+            "operators/grafana/service.yaml",
+            grafana_stack_variables,
+        ),
+    ]
+    if openshift_routes_available:
+        stack_documents.extend(
+            installer._render_asset_documents(
                 "operators/grafana/route.yaml",
                 grafana_stack_variables,
-            ),
-        ],
+            )
+        )
+    else:
+        detail(
+            f"Skipping Grafana OpenShift Route because CRD {OPENSHIFT_ROUTE_CRD} "
+            "is not present; use port-forward to the grafana Service"
+        )
+    installer._apply_documents(
+        stack_documents,
         namespace=installer.grafana_namespace,
         description="applying Grafana stack",
     )
-    step("Waiting for Grafana route")
-    wait_for_grafana_route(installer, timeout_seconds=600)
+    if openshift_routes_available:
+        step("Waiting for Grafana route")
+        wait_for_grafana_route(installer, timeout_seconds=600)
+    else:
+        detail("Skipping Grafana route wait on non-OpenShift clusters")
     step("Waiting for Grafana to become ready")
     wait_for_grafana_ready(installer, timeout_seconds=600)

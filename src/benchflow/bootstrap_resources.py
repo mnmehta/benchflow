@@ -80,13 +80,25 @@ def apply_workspace_pvcs(installer: Any) -> None:
     )
 
 
+OPENSHIFT_CLUSTER_MONITORING_VIEW_ROLE = "cluster-monitoring-view"
+OPENSHIFT_MONITORING_NAMESPACE = "openshift-monitoring"
+
+
+def openshift_cluster_monitoring_available(installer: Any) -> bool:
+    return installer._resource_exists(
+        "get", "clusterrole", OPENSHIFT_CLUSTER_MONITORING_VIEW_ROLE
+    )
+
+
 def apply_cluster_monitoring_rbac(installer: Any) -> None:
     step("Applying cluster monitoring RBAC")
-    if not installer._resource_exists("get", "clusterrole", "cluster-monitoring-view"):
-        raise CommandError(
-            "required ClusterRole not found: cluster-monitoring-view. "
-            "This BenchFlow MVP expects OpenShift cluster monitoring to be available."
+    if not openshift_cluster_monitoring_available(installer):
+        detail(
+            f"Skipping cluster monitoring RBAC because ClusterRole "
+            f"{OPENSHIFT_CLUSTER_MONITORING_VIEW_ROLE} is not present "
+            "(OpenShift cluster monitoring is unavailable on this cluster)"
         )
+        return
 
     installer._apply_asset_documents(
         "rbac/runner-cluster-monitoring-view.yaml",
@@ -98,11 +110,15 @@ def apply_cluster_monitoring_rbac(installer: Any) -> None:
 
 def apply_cluster_monitoring_config(installer: Any) -> None:
     step("Enabling user workload monitoring")
-    if not installer._resource_exists("get", "namespace", "openshift-monitoring"):
-        raise CommandError(
-            "required namespace not found: openshift-monitoring. "
-            "BenchFlow expects OpenShift cluster monitoring to be available."
+    if not installer._resource_exists(
+        "get", "namespace", OPENSHIFT_MONITORING_NAMESPACE
+    ):
+        detail(
+            f"Skipping user workload monitoring because namespace "
+            f"{OPENSHIFT_MONITORING_NAMESPACE} is not present "
+            "(OpenShift cluster monitoring is unavailable on this cluster)"
         )
+        return
 
     data: dict[str, str] = {}
     if installer._resource_exists(
@@ -110,14 +126,14 @@ def apply_cluster_monitoring_config(installer: Any) -> None:
         "configmap",
         "cluster-monitoring-config",
         "-n",
-        "openshift-monitoring",
+        OPENSHIFT_MONITORING_NAMESPACE,
     ):
         configmap = installer._oc_json(
             "get",
             "configmap",
             "cluster-monitoring-config",
             "-n",
-            "openshift-monitoring",
+            OPENSHIFT_MONITORING_NAMESPACE,
             retry=True,
             description="reading cluster monitoring config",
         )
@@ -126,7 +142,8 @@ def apply_cluster_monitoring_config(installer: Any) -> None:
     config = yaml.safe_load(data.get("config.yaml") or "{}") or {}
     if not isinstance(config, dict):
         raise CommandError(
-            "openshift-monitoring/cluster-monitoring-config data.config.yaml must be a YAML mapping"
+            f"{OPENSHIFT_MONITORING_NAMESPACE}/cluster-monitoring-config "
+            "data.config.yaml must be a YAML mapping"
         )
 
     if config.get("enableUserWorkload") is True:
@@ -141,7 +158,7 @@ def apply_cluster_monitoring_config(installer: Any) -> None:
                     "kind": "ConfigMap",
                     "metadata": {
                         "name": "cluster-monitoring-config",
-                        "namespace": "openshift-monitoring",
+                        "namespace": OPENSHIFT_MONITORING_NAMESPACE,
                     },
                     "data": data,
                 }
@@ -370,13 +387,64 @@ def apply_runner_rbac(installer: Any) -> None:
     )
 
 
+OPENSHIFT_SCC_CRD = "securitycontextconstraints.security.openshift.io"
+
+# OpenShift-only objects in rbac/hostpath-runtime.yaml. Plain Kubernetes (CKS,
+# etc.) has no SCC API; managed llm-d hostPath admission is already OpenShift-
+# gated at deploy time via namespace openshift.io/sa.scc.* annotations.
+_HOSTPATH_RUNTIME_OPENSHIFT_KINDS = frozenset(
+    {
+        "SecurityContextConstraints",
+        "ClusterRole",
+        "RoleBinding",
+    }
+)
+
+
+def select_hostpath_runtime_documents(
+    documents: list[dict[str, Any]], *, openshift_scc_available: bool
+) -> list[dict[str, Any]]:
+    """Pick hostPath runtime manifests for the current cluster API surface.
+
+    On OpenShift, apply the full SCC + ServiceAccount + SCC-use RBAC set.
+    Elsewhere, keep only the ServiceAccount so bootstrap does not fail on the
+    missing security.openshift.io CRD.
+    """
+    if openshift_scc_available:
+        return list(documents)
+    return [
+        document
+        for document in documents
+        if str(document.get("kind") or "") not in _HOSTPATH_RUNTIME_OPENSHIFT_KINDS
+    ]
+
+
+def openshift_scc_available(installer: Any) -> bool:
+    return installer._resource_exists("get", "crd", OPENSHIFT_SCC_CRD)
+
+
 def apply_hostpath_runtime_security(installer: Any) -> None:
     step("Applying managed hostPath runtime security")
-    installer._apply_asset_documents(
+    documents = installer._render_asset_documents(
         "rbac/hostpath-runtime.yaml",
+        installer._base_asset_variables(),
+    )
+    scc_available = openshift_scc_available(installer)
+    if not scc_available:
+        detail(
+            "Skipping OpenShift SecurityContextConstraints / SCC-use RBAC "
+            f"because CRD {OPENSHIFT_SCC_CRD} is not present"
+        )
+    selected = select_hostpath_runtime_documents(
+        documents, openshift_scc_available=scc_available
+    )
+    if not selected:
+        detail("No hostPath runtime security manifests to apply")
+        return
+    installer._apply_documents(
+        selected,
         namespace=None,
         description="applying managed hostPath runtime security",
-        variables=installer._base_asset_variables(),
     )
 
 

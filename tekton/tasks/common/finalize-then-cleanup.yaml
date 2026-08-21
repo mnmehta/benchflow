@@ -1,0 +1,156 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: finalize-then-cleanup
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/displayName: "Finalize MLflow Then Cleanup"
+spec:
+  description: >-
+    Runs failure-path MLflow finalization and then RunPlan cleanup in one Task.
+    Tekton forbids runAfter under spec.finally, so ordering must live in steps.
+    RUN_PLAN is passed via env (not interpolated into a script string) so JSON
+    quotes do not break /bin/sh — same pattern as verify-completions-endpoint.
+  params:
+    - name: IMAGE
+      type: string
+      default: ghcr.io/albertoperdomo2/benchflow:latest
+    - name: RUN_PLAN
+      type: string
+    - name: PIPELINE_RUN_NAME
+      type: string
+      default: ""
+    - name: MLFLOW_RUN_ID
+      type: string
+      default: ""
+    - name: RUN_START_TIME
+      type: string
+      default: ""
+    - name: STATUS
+      type: string
+      default: FAILED
+    - name: REASON
+      type: string
+      default: "normal MLflow upload did not complete"
+    - name: TEARDOWN
+      type: string
+      default: "false"
+    - name: STAGE_COLLECT
+      type: string
+      default: "false"
+    - name: UPLOAD_STATUS
+      type: string
+      default: ""
+    - name: STAGE_CLEANUP
+      type: string
+      default: "false"
+  workspaces:
+    - name: artifacts
+      description: Workspace containing or receiving the full per-run artifact bundle
+      optional: true
+    - name: state-storage
+      description: Workspace that may contain setup-state.json
+      optional: true
+    - name: target-kubeconfig
+      description: Optional kubeconfig for remote target-cluster operations
+      optional: true
+  steps:
+    - name: finalize
+      image: $(params.IMAGE)
+      imagePullPolicy: Always
+      env:
+        - name: BENCHFLOW_TARGET_KUBECONFIG_WORKSPACE
+          value: $(workspaces.target-kubeconfig.path)
+        - name: MLFLOW_TRACKING_URI
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-ui-auth
+              key: tracking-uri
+              optional: true
+        - name: MLFLOW_TRACKING_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-ui-auth
+              key: username
+              optional: true
+        - name: MLFLOW_TRACKING_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-ui-auth
+              key: password
+              optional: true
+        - name: MLFLOW_WORKSPACE
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-ui-auth
+              key: workspace
+              optional: true
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-s3-secret
+              key: access-key
+              optional: true
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-s3-secret
+              key: secret-key
+              optional: true
+        - name: AWS_DEFAULT_REGION
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-s3-secret
+              key: region
+              optional: true
+        - name: MLFLOW_TRACKING_INSECURE_TLS
+          value: "true"
+        - name: STAGE_COLLECT
+          value: $(params.STAGE_COLLECT)
+        - name: UPLOAD_STATUS
+          value: $(params.UPLOAD_STATUS)
+        # Keep JSON out of the script body — Tekton substitutes into env values.
+        - name: RUN_PLAN_JSON
+          value: $(params.RUN_PLAN)
+      command:
+        - /bin/sh
+        - -ec
+      args:
+        - |
+          if [ "${STAGE_COLLECT}" != "true" ] || [ "${UPLOAD_STATUS}" = "Succeeded" ]; then
+            echo "Skipping MLflow finalize (stage-collect=${STAGE_COLLECT}, upload-status=${UPLOAD_STATUS})"
+            exit 0
+          fi
+          exec bflow mlflow finalize \
+            --run-plan-json "$RUN_PLAN_JSON" \
+            --mlflow-run-id "$(params.MLFLOW_RUN_ID)" \
+            --artifacts-dir "$(workspaces.artifacts.path)" \
+            --execution-name "$(params.PIPELINE_RUN_NAME)" \
+            --run-start-time "$(params.RUN_START_TIME)" \
+            --status "$(params.STATUS)" \
+            --reason "$(params.REASON)" \
+            --collect-artifacts
+    - name: cleanup
+      image: $(params.IMAGE)
+      imagePullPolicy: Always
+      env:
+        - name: BENCHFLOW_TARGET_KUBECONFIG_WORKSPACE
+          value: $(workspaces.target-kubeconfig.path)
+        - name: STAGE_CLEANUP
+          value: $(params.STAGE_CLEANUP)
+        - name: RUN_PLAN_JSON
+          value: $(params.RUN_PLAN)
+      command:
+        - /bin/sh
+        - -ec
+      args:
+        - |
+          if [ "${STAGE_CLEANUP}" != "true" ]; then
+            echo "Skipping cleanup (stage-cleanup=${STAGE_CLEANUP})"
+            exit 0
+          fi
+          exec bflow task cleanup-run-plan \
+            --run-plan-json "$RUN_PLAN_JSON" \
+            --setup-state-path "$(workspaces.state-storage.path)/setup-state.json" \
+            --teardown-text "$(params.TEARDOWN)"

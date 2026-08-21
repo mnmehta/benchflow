@@ -298,16 +298,11 @@ spec:
           value: "$(tasks.benchmark.results.benchmark-end-time)"
 
   finally:
-    - name: finalize-mlflow-run
-      when:
-        - input: "$(tasks.resolve-run-plan.results.stage-collect)"
-          operator: in
-          values: ["true"]
-        - input: "$(tasks.upload-to-mlflow.status)"
-          operator: notin
-          values: ["Succeeded"]
+    # Tekton forbids runAfter under spec.finally (all finally tasks run in
+    # parallel). Keep finalize-before-cleanup by sequencing both in one Task.
+    - name: finalize-then-cleanup
       taskRef:
-        name: finalize-mlflow-run
+        name: finalize-then-cleanup
       params:
         - name: IMAGE
           value: $(params.BENCHFLOW_IMAGE)
@@ -323,30 +318,18 @@ spec:
           value: FAILED
         - name: REASON
           value: "normal MLflow upload did not complete"
+        - name: TEARDOWN
+          value: $(params.TEARDOWN)
+        - name: STAGE_COLLECT
+          value: "$(tasks.resolve-run-plan.results.stage-collect)"
+        - name: UPLOAD_STATUS
+          value: "$(tasks.upload-to-mlflow.status)"
+        - name: STAGE_CLEANUP
+          value: "$(tasks.resolve-run-plan.results.stage-cleanup)"
       workspaces:
         - name: artifacts
           workspace: results
           subPath: $(context.pipelineRun.name)
-        - name: target-kubeconfig
-          workspace: target-kubeconfig
-    - name: cleanup
-      # Finalization collects failed deployment pod state and logs. It must
-      # complete before cleanup deletes those workload pods.
-      runAfter: [finalize-mlflow-run]
-      when:
-        - input: "$(tasks.resolve-run-plan.results.stage-cleanup)"
-          operator: in
-          values: ["true"]
-      taskRef:
-        name: cleanup-run-plan
-      params:
-        - name: IMAGE
-          value: $(params.BENCHFLOW_IMAGE)
-        - name: RUN_PLAN
-          value: $(params.RUN_PLAN)
-        - name: TEARDOWN
-          value: $(params.TEARDOWN)
-      workspaces:
         - name: state-storage
           workspace: results
           subPath: $(context.pipelineRun.name)/platform-state
