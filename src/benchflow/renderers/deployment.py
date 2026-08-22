@@ -726,6 +726,32 @@ def _rhaiis_raw_vllm_container(plan: ResolvedRunPlan) -> dict[str, Any]:
     }
 
 
+def _rhaiis_vllm_serve_argv(command: list[Any], args: list[Any]) -> list[str]:
+    """Rewrite api_server ``--model=`` argv into ``vllm serve <model> …``.
+
+    The kimi-k3 / InferenceX multi-node path uses ``vllm serve`` (serve.py), which
+    sets local MQ bind addresses correctly under hostNetwork. Launching via
+    ``python -m vllm.entrypoints.openai.api_server`` makes workers try to bind
+    ZMQ to ``--master-addr`` and fail with ``Cannot assign requested address``.
+    """
+    model: str | None = None
+    rest: list[str] = []
+    for arg in args:
+        text = str(arg)
+        if text.startswith("--model="):
+            model = text.split("=", 1)[1]
+        else:
+            rest.append(text)
+    if model:
+        return ["vllm", "serve", model, *rest]
+    if command and str(command[0]) == "vllm":
+        return [str(item) for item in (*command, *args)]
+    raise ValidationError(
+        "rhaiis distributed raw-vllm requires --model=… in container args "
+        "(or an existing vllm serve command)"
+    )
+
+
 def _rhaiis_raw_vllm_pod_spec(
     plan: ResolvedRunPlan, container_spec: dict[str, Any]
 ) -> dict[str, Any]:
@@ -873,12 +899,17 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
     container_spec["env"] = container_env
 
     if launch_style == "ix-agg":
-        # InferenceX / kimi-k3 image: --nnodes/--node-rank/--master-addr with
-        # --data-parallel-size (profile-owned). Matches successful H200 AgentX
-        # bring-up. Rank 0 delays so workers start first (deploy.sh order).
+        # InferenceX / kimi-k3 image: vllm serve + --nnodes/--node-rank/
+        # --master-addr with --data-parallel-size (profile-owned). Rank 0 delays
+        # so workers start first (deploy.sh order). Also pass local
+        # --data-parallel-address=$POD_IP so ZMQ/MQ binds on this node rather
+        # than attempting to bind to --master-addr under hostNetwork.
+        serve_argv = _rhaiis_vllm_serve_argv(
+            container_spec.pop("command"),
+            container_spec.pop("args"),
+        )
         base_argv = [
-            *container_spec.pop("command"),
-            *container_spec.pop("args"),
+            *serve_argv,
             f"--nnodes={runtime.replicas}",
         ]
         launch_script = (
@@ -895,7 +926,8 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             '    sleep "${delay}"\n'
             "  fi\n"
             '  exec "$@" --node-rank="${node_rank}" '
-            '--master-addr="${master_addr}"\n'
+            '--master-addr="${master_addr}" '
+            '--data-parallel-address="${POD_IP}"\n'
             "fi\n"
             'master_addr=$(getent ahostsv4 "${DP_LEADER_HOST}" 2>/dev/null '
             "| awk '{print $1; exit}')\n"
@@ -908,14 +940,18 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             "  exit 1\n"
             "fi\n"
             'exec "$@" --node-rank="${node_rank}" '
-            '--master-addr="${master_addr}" --headless\n'
+            '--master-addr="${master_addr}" '
+            '--data-parallel-address="${POD_IP}" --headless\n'
         )
         distributed_port = master_port
     else:
         # Stock vLLM 0.27+ external / one-pod-per-rank MoE DP.
+        serve_argv = _rhaiis_vllm_serve_argv(
+            container_spec.pop("command"),
+            container_spec.pop("args"),
+        )
         base_argv = [
-            *container_spec.pop("command"),
-            *container_spec.pop("args"),
+            *serve_argv,
             f"--data-parallel-rpc-port={master_port}",
         ]
         launch_script = (

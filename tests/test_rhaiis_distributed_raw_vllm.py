@@ -105,14 +105,19 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         self.assertIn("${POD_NAME##*-}", script)
         self.assertIn('--node-rank="${node_rank}"', script)
         self.assertIn('--master-addr="${master_addr}"', script)
+        self.assertIn('--data-parallel-address="${POD_IP}"', script)
         self.assertIn("--headless", script)
         self.assertIn("rank0 waiting", script)
         self.assertIn("getent ahostsv4", script)
         joined = " ".join(str(a) for a in container["args"])
+        self.assertIn("vllm", container["args"])
+        self.assertIn("serve", container["args"])
+        self.assertIn("/models/Kimi-K3", container["args"])
         self.assertIn("--nnodes=4", joined)
+        self.assertNotIn("--model=/models/Kimi-K3", joined)
+        self.assertNotIn("vllm.entrypoints.openai.api_server", joined)
         self.assertNotIn("--data-parallel-rank=", joined)
         self.assertNotIn("--data-parallel-rpc-port=", joined)
-        self.assertIn("--model=/models/Kimi-K3", container["args"])
         env_by_name = {item["name"]: item for item in container["env"]}
         self.assertEqual(
             env_by_name["POD_NAME"]["valueFrom"]["fieldRef"]["fieldPath"],
