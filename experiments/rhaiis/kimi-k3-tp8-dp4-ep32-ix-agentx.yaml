@@ -1,0 +1,29 @@
+apiVersion: benchflow.io/v1alpha1
+kind: Experiment
+metadata:
+  name: kimi-k3-tp8-dp4-ep32-ix-agentx
+spec:
+  model:
+    name:
+      - moonshotai/Kimi-K3
+  deployment_profile: rhaiis-kimi-k3-tp8-dp4-ep32
+  # Full redeploy per concurrency: matrix children each deploy+cleanup.
+  # Prefer the overnight supervisor (../run-ix-agentx-c12345-overnight.sh)
+  # for sequential C=1..5 with one retry on failure.
+  benchmark_profile: aiperf-agentx-ix-h200-c1
+  metrics_profile: detailed
+  namespace: benchflow
+  stages:
+    download: false
+    deploy: true
+    benchmark: true
+    collect: true
+    cleanup: true
+  mlflow:
+    tags:
+      accelerator: H200
+      topology: tp8-dp4-ep32
+      workload: ix-agentx
+  execution:
+    # One C ≈ deploy(~15m) + warmup/grace + 3600s measure + collect; ×5 + retries.
+    timeout: 24h
