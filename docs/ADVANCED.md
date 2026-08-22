@@ -700,10 +700,11 @@ under `hostNetwork`).
 - **`ix-agg`** (default; used by the Kimi-K3 profile): InferenceX / `vllm/vllm-openai:kimi-k3`
   style — launches via **`vllm serve`** (not `api_server`). BenchFlow injects
   `--nnodes`, `--node-rank`, `--master-addr` (rank0 = `POD_IP`; workers resolve
-  the headless `…-0` DNS), and **`--data-parallel-address=$POD_IP`** so ZMQ/MQ
-  binds locally under hostNetwork. Workers get `--headless`. Rank 0 sleeps
+  the headless `…-0` DNS). Workers get `--headless`. Rank 0 sleeps
   `head_start_delay_seconds` (default 45) so workers start first, matching
-  `deploy.sh`. Profile owns `--data-parallel-size` and EP flags.
+  `deploy.sh`. Profile owns `--data-parallel-size` and EP flags. Do not pass
+  `--data-parallel-address` on this path (IX_AGG omits it; `serve.py` sets
+  local `mq_connect_ip`).
 - **`external-dp`**: stock vLLM 0.27+ one-pod-per-rank MoE DP —
   `--data-parallel-rank`, `--data-parallel-address`, `--data-parallel-rpc-port`
   (from `master_port`). See

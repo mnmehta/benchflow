@@ -901,9 +901,9 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
     if launch_style == "ix-agg":
         # InferenceX / kimi-k3 image: vllm serve + --nnodes/--node-rank/
         # --master-addr with --data-parallel-size (profile-owned). Rank 0 delays
-        # so workers start first (deploy.sh order). Also pass local
-        # --data-parallel-address=$POD_IP so ZMQ/MQ binds on this node rather
-        # than attempting to bind to --master-addr under hostNetwork.
+        # so workers start first (deploy.sh order). Do NOT pass
+        # --data-parallel-address here (IX_AGG skips it); serve.py sets local
+        # mq_connect_ip while --master-addr remains the head rendezvous.
         serve_argv = _rhaiis_vllm_serve_argv(
             container_spec.pop("command"),
             container_spec.pop("args"),
@@ -926,8 +926,7 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             '    sleep "${delay}"\n'
             "  fi\n"
             '  exec "$@" --node-rank="${node_rank}" '
-            '--master-addr="${master_addr}" '
-            '--data-parallel-address="${POD_IP}"\n'
+            '--master-addr="${master_addr}"\n'
             "fi\n"
             'master_addr=$(getent ahostsv4 "${DP_LEADER_HOST}" 2>/dev/null '
             "| awk '{print $1; exit}')\n"
@@ -940,8 +939,7 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             "  exit 1\n"
             "fi\n"
             'exec "$@" --node-rank="${node_rank}" '
-            '--master-addr="${master_addr}" '
-            '--data-parallel-address="${POD_IP}" --headless\n'
+            '--master-addr="${master_addr}" --headless\n'
         )
         distributed_port = master_port
     else:

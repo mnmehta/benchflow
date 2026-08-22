@@ -105,7 +105,7 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         self.assertIn("${POD_NAME##*-}", script)
         self.assertIn('--node-rank="${node_rank}"', script)
         self.assertIn('--master-addr="${master_addr}"', script)
-        self.assertIn('--data-parallel-address="${POD_IP}"', script)
+        self.assertNotIn("data-parallel-address", script)
         self.assertIn("--headless", script)
         self.assertIn("rank0 waiting", script)
         self.assertIn("getent ahostsv4", script)
