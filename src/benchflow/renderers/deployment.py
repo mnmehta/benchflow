@@ -838,9 +838,9 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
         )
 
     distributed = plan.deployment.options.get("distributed") or {}
-    # master_port is the DP RPC port for stock vLLM multi-node DP
-    # (--data-parallel-rpc-port), not torch --master-port / --nnodes.
-    rpc_port = int(distributed.get("master_port", 29500))
+    master_port = int(distributed.get("master_port", 29500))
+    launch_style = str(distributed.get("launch_style") or "ix-agg")
+    head_start_delay_seconds = int(distributed.get("head_start_delay_seconds", 45))
     workload_name = rhaiis_raw_vllm_deployment_name(plan)
     headless_name = rhaiis_raw_vllm_headless_service_name(plan)
     leader_host = f"{workload_name}-0.{headless_name}.{plan.deployment.namespace}.svc.cluster.local"
@@ -849,20 +849,9 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
     metrics_target = {"benchflow.io/metrics-target": plan.deployment.release_name}
 
     container_spec = _rhaiis_raw_vllm_container(plan)
-    # Stock vLLM 0.27+ multi-node MoE DP (external LB / one pod per rank):
-    # --data-parallel-rank (not --data-parallel-start-rank; that is for
-    # hybrid/internal multi-engine-per-node). Passing rank also implies
-    # external LB. No IX-style --nnodes/--node-rank/--master-addr.
-    # Profile still owns --data-parallel-size and EP flags.
-    base_argv = [
-        *container_spec.pop("command"),
-        *container_spec.pop("args"),
-        f"--data-parallel-rpc-port={rpc_port}",
-    ]
     # Under hostNetwork HOSTNAME is the node name (e.g. gf2a612), so do not
     # derive the StatefulSet ordinal from it. metadata.name stays
-    # <sts>-<ordinal> either way. Rank 0 binds DP on POD_IP; workers resolve
-    # the leader headless DNS and pass that as --data-parallel-address.
+    # <sts>-<ordinal> either way.
     container_env = list(container_spec.get("env") or [])
     container_env.extend(
         [
@@ -875,12 +864,61 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
                 "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}},
             },
             {"name": "DP_LEADER_HOST", "value": leader_host},
+            {
+                "name": "HEAD_START_DELAY_SECONDS",
+                "value": str(head_start_delay_seconds),
+            },
         ]
     )
     container_spec["env"] = container_env
-    container_spec["command"] = ["/bin/sh", "-c"]
-    container_spec["args"] = [
-        (
+
+    if launch_style == "ix-agg":
+        # InferenceX / kimi-k3 image: --nnodes/--node-rank/--master-addr with
+        # --data-parallel-size (profile-owned). Matches successful H200 AgentX
+        # bring-up. Rank 0 delays so workers start first (deploy.sh order).
+        base_argv = [
+            *container_spec.pop("command"),
+            *container_spec.pop("args"),
+            f"--nnodes={runtime.replicas}",
+        ]
+        launch_script = (
+            'node_rank=${POD_NAME##*-}\n'
+            'if [ -z "${POD_IP}" ]; then\n'
+            '  echo "POD_IP is empty; cannot set --master-addr" >&2\n'
+            "  exit 1\n"
+            "fi\n"
+            'if [ "${node_rank}" = "0" ]; then\n'
+            '  master_addr="${POD_IP}"\n'
+            '  delay="${HEAD_START_DELAY_SECONDS:-0}"\n'
+            '  if [ "${delay}" -gt 0 ] 2>/dev/null; then\n'
+            '    echo "rank0 waiting ${delay}s so DP workers start first" >&2\n'
+            '    sleep "${delay}"\n'
+            "  fi\n"
+            '  exec "$@" --node-rank="${node_rank}" '
+            '--master-addr="${master_addr}"\n'
+            "fi\n"
+            'master_addr=$(getent ahostsv4 "${DP_LEADER_HOST}" 2>/dev/null '
+            "| awk '{print $1; exit}')\n"
+            'if [ -z "${master_addr}" ]; then\n'
+            '  master_addr=$(getent hosts "${DP_LEADER_HOST}" 2>/dev/null '
+            "| awk '{print $1; exit}')\n"
+            "fi\n"
+            'if [ -z "${master_addr}" ]; then\n'
+            '  echo "failed to resolve DP leader ${DP_LEADER_HOST}" >&2\n'
+            "  exit 1\n"
+            "fi\n"
+            'exec "$@" --node-rank="${node_rank}" '
+            '--master-addr="${master_addr}" --headless\n'
+        )
+        distributed_port = master_port
+    else:
+        # Stock vLLM 0.27+ external / one-pod-per-rank MoE DP.
+        base_argv = [
+            *container_spec.pop("command"),
+            *container_spec.pop("args"),
+            f"--data-parallel-rpc-port={master_port}",
+        ]
+        launch_script = (
             'node_rank=${POD_NAME##*-}\n'
             'if [ -z "${POD_IP}" ]; then\n'
             '  echo "POD_IP is empty; cannot set --data-parallel-address" >&2\n'
@@ -906,13 +944,24 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             "fi\n"
             'exec "$@" --data-parallel-rank="${node_rank}" '
             '--data-parallel-address="${dp_addr}" --headless\n'
-        ),
+        )
+        distributed_port = master_port
+
+    container_spec["command"] = ["/bin/sh", "-c"]
+    container_spec["args"] = [
+        launch_script,
         "benchflow-vllm",
         *base_argv,
     ]
     container_spec["ports"].append(
-        {"containerPort": rpc_port, "name": "distributed", "protocol": "TCP"}
+        {
+            "containerPort": distributed_port,
+            "name": "distributed",
+            "protocol": "TCP",
+        }
     )
+    # Kimi weight load is many minutes; keep workers "ready" via process liveness
+    # and give rank0 a long HTTP readiness budget (matches IX health polls).
     container_spec["readinessProbe"] = {
         "exec": {
             "command": [
@@ -927,9 +976,10 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
                 ),
             ]
         },
+        "initialDelaySeconds": 30,
         "periodSeconds": 10,
         "timeoutSeconds": 5,
-        "failureThreshold": 3,
+        "failureThreshold": 720,
     }
     pod_spec = _rhaiis_raw_vllm_pod_spec(plan, container_spec)
     pod_spec["hostNetwork"] = bool(distributed.get("host_network", False))
@@ -988,7 +1038,7 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
                 },
                 {
                     "name": "distributed",
-                    "port": rpc_port,
+                    "port": distributed_port,
                     "protocol": "TCP",
                     "targetPort": "distributed",
                 },

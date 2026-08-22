@@ -791,7 +791,15 @@ def _rhaiis_raw_vllm_options_from_dict(raw: Any) -> dict[str, Any]:
     if not isinstance(distributed_raw, dict):
         raise ValidationError("spec.options.distributed must be a mapping")
     unknown_distributed = sorted(
-        set(distributed_raw) - {"enabled", "master_port", "host_network", "host_ipc"}
+        set(distributed_raw)
+        - {
+            "enabled",
+            "master_port",
+            "host_network",
+            "host_ipc",
+            "launch_style",
+            "head_start_delay_seconds",
+        }
     )
     if unknown_distributed:
         raise ValidationError(
@@ -809,11 +817,25 @@ def _rhaiis_raw_vllm_options_from_dict(raw: Any) -> dict[str, Any]:
             raise ValidationError(
                 "spec.options.distributed.master_port must be between 1 and 65535"
             )
+        launch_style = str(distributed_raw.get("launch_style") or "ix-agg").strip()
+        if launch_style not in {"ix-agg", "external-dp"}:
+            raise ValidationError(
+                "spec.options.distributed.launch_style must be 'ix-agg' or 'external-dp'"
+            )
+        head_start_delay_seconds = int(
+            distributed_raw.get("head_start_delay_seconds", 45)
+        )
+        if head_start_delay_seconds < 0:
+            raise ValidationError(
+                "spec.options.distributed.head_start_delay_seconds must be >= 0"
+            )
         normalized["distributed"] = {
             "enabled": enabled,
             "master_port": master_port,
             "host_network": _as_bool(distributed_raw.get("host_network"), False),
             "host_ipc": _as_bool(distributed_raw.get("host_ipc"), False),
+            "launch_style": launch_style,
+            "head_start_delay_seconds": head_start_delay_seconds,
         }
     return normalized
 

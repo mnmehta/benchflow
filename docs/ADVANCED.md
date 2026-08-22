@@ -582,7 +582,9 @@ spec:
     model_path: /models # rhaiis raw-vllm only; uses a runtime hostPath instead of model_storage PVC
     distributed: # rhaiis raw-vllm only
       enabled: true # render one ranked multi-node StatefulSet instead of independent Deployment replicas
-      master_port: 29500 # maps to --data-parallel-rpc-port on stock vLLM 0.27+
+      launch_style: ix-agg # ix-agg (kimi-k3 / InferenceX) or external-dp (stock vLLM 0.27+)
+      head_start_delay_seconds: 45 # rank0 delay so workers start first (ix-agg)
+      master_port: 29500 # ix-agg unused for argv; external-dp maps to --data-parallel-rpc-port
       host_network: true
       host_ipc: true
 ```
@@ -688,20 +690,27 @@ same path on every selected node. Each node still has isolated hostPath contents
 BenchFlow does not synchronize them.
 
 RHAIIS raw-vLLM profiles can use `spec.options.distributed.enabled` for one
-multi-node vLLM process group against **stock vLLM 0.27+**. BenchFlow renders a
-parallel-start `StatefulSet`, a headless rendezvous Service, and a stable API
-Service that resolves only to ordinal zero. The StatefulSet ordinal (from
-`metadata.name` / `POD_NAME`, not `HOSTNAME`) becomes `--data-parallel-rank`
-(external / one-pod-per-rank MoE DP; this also implies external LB). Ordinal
-zero serves the OpenAI API and every other ordinal receives `--headless`.
-BenchFlow injects `--data-parallel-rpc-port` (from `distributed.master_port`)
-and `--data-parallel-address` (rank 0 = `status.podIP`; workers = resolved IP
-of the headless `…-0` DNS name). The profile owns the parallel strategy, such
-as `--data-parallel-size` and `--enable-expert-parallel`. Do **not** pass
-IX-style `--nnodes` / `--node-rank` / `--master-addr`, and do **not** use
-`--data-parallel-start-rank` here (that flag is for hybrid/internal
-multi-engine-per-node). See
-[vLLM 0.27.1 vs older IX/nnodes DP launch](vllm-0.27.1-vs-older-ix-agg-dp.md).
+multi-node vLLM process group. BenchFlow renders a parallel-start `StatefulSet`,
+a headless rendezvous Service, and a stable API Service that resolves only to
+ordinal zero. Rank comes from `metadata.name` / `POD_NAME` (never `HOSTNAME`
+under `hostNetwork`).
+
+`distributed.launch_style` selects the serve argv:
+
+- **`ix-agg`** (default; used by the Kimi-K3 profile): InferenceX / `vllm/vllm-openai:kimi-k3`
+  style — BenchFlow injects `--nnodes`, `--node-rank`, `--master-addr` (rank0 =
+  `POD_IP`; workers resolve the headless `…-0` DNS). Workers get `--headless`.
+  Rank 0 sleeps `head_start_delay_seconds` (default 45) so workers start first,
+  matching `deploy.sh`. Profile owns `--data-parallel-size` and EP flags.
+- **`external-dp`**: stock vLLM 0.27+ one-pod-per-rank MoE DP —
+  `--data-parallel-rank`, `--data-parallel-address`, `--data-parallel-rpc-port`
+  (from `master_port`). See
+  [vLLM 0.27.1 vs older IX/nnodes DP launch](vllm-0.27.1-vs-older-ix-agg-dp.md).
+
+The characterized Kimi profile uses the **`kimi-k3` image + `ix-agg`**, with
+`VLLM_ENGINE_READY_TIMEOUT_S=7200` and a long rank0 HTTP readiness budget, so
+BenchFlow metrics/MLflow stay in place while the underlying serve matches the
+known-good H200 AgentX bring-up.
 
 Distributed raw-vLLM requires an absolute `spec.options.model_path` inside one
 of `spec.runtime.host_paths`, and at least two runtime replicas. BenchFlow adds

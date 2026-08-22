@@ -45,17 +45,26 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         self.assertEqual(plan.deployment.namespace, "benchflow")
         self.assertEqual(plan.deployment.runtime.replicas, 4)
         self.assertEqual(plan.deployment.runtime.tensor_parallelism, 8)
+        self.assertEqual(plan.deployment.runtime.image, "vllm/vllm-openai:kimi-k3")
         self.assertEqual(
             plan.deployment.runtime.service_account_name,
             "benchflow-hostpath-runtime",
         )
         self.assertEqual(plan.deployment.options["model_path"], "/models/Kimi-K3")
         self.assertTrue(plan.deployment.options["distributed"]["enabled"])
+        self.assertEqual(
+            plan.deployment.options["distributed"]["launch_style"], "ix-agg"
+        )
         self.assertTrue(plan.deployment.options["distributed"]["host_network"])
         self.assertTrue(plan.deployment.options["distributed"]["host_ipc"])
         self.assertIn("--data-parallel-size=4", plan.deployment.runtime.vllm_args)
         self.assertIn("--enable-expert-parallel", plan.deployment.runtime.vllm_args)
-        self.assertIn("--max-model-len=1048576", plan.deployment.runtime.vllm_args)
+        self.assertNotIn(
+            "--max-model-len=1048576", plan.deployment.runtime.vllm_args
+        )
+        self.assertEqual(
+            plan.deployment.runtime.env.get("VLLM_ENGINE_READY_TIMEOUT_S"), "7200"
+        )
         self.assertFalse(plan.stages.download)
 
     def test_renderer_creates_ranked_statefulset_and_leader_service(self) -> None:
@@ -90,19 +99,19 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         )
 
         container = pod_spec["containers"][0]
+        self.assertEqual(container["image"], "vllm/vllm-openai:kimi-k3")
         self.assertEqual(container["command"], ["/bin/sh", "-c"])
-        self.assertIn("${POD_NAME##*-}", container["args"][0])
-        self.assertIn("--data-parallel-rank=\"${node_rank}\"", container["args"][0])
-        self.assertIn('--data-parallel-address="${dp_addr}"', container["args"][0])
-        self.assertIn("--headless", container["args"][0])
-        self.assertIn("getent ahostsv4", container["args"][0])
+        script = container["args"][0]
+        self.assertIn("${POD_NAME##*-}", script)
+        self.assertIn('--node-rank="${node_rank}"', script)
+        self.assertIn('--master-addr="${master_addr}"', script)
+        self.assertIn("--headless", script)
+        self.assertIn("rank0 waiting", script)
+        self.assertIn("getent ahostsv4", script)
         joined = " ".join(str(a) for a in container["args"])
-        self.assertNotIn("--nnodes=", joined)
-        self.assertNotIn("--node-rank=", joined)
-        self.assertNotIn("--master-addr=", joined)
-        self.assertNotIn("--data-parallel-start-rank=", joined)
-        self.assertNotIn("--data-parallel-size-local=", joined)
-        self.assertIn("--data-parallel-rpc-port=29500", container["args"])
+        self.assertIn("--nnodes=4", joined)
+        self.assertNotIn("--data-parallel-rank=", joined)
+        self.assertNotIn("--data-parallel-rpc-port=", joined)
         self.assertIn("--model=/models/Kimi-K3", container["args"])
         env_by_name = {item["name"]: item for item in container["env"]}
         self.assertEqual(
@@ -114,6 +123,8 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
             "status.podIP",
         )
         self.assertIn(workload_name + "-0.", env_by_name["DP_LEADER_HOST"]["value"])
+        self.assertEqual(env_by_name["HEAD_START_DELAY_SECONDS"]["value"], "45")
+        self.assertEqual(env_by_name["VLLM_ENGINE_READY_TIMEOUT_S"]["value"], "7200")
         self.assertNotIn(
             "model-storage", {volume["name"] for volume in pod_spec["volumes"]}
         )
@@ -122,6 +133,7 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         readiness = container["readinessProbe"]["exec"]["command"][-1]
         self.assertIn("${POD_NAME##*-}", readiness)
         self.assertNotIn("${HOSTNAME##*-}", readiness)
+        self.assertEqual(container["readinessProbe"]["failureThreshold"], 720)
 
         headless = by_kind_name[("Service", headless_name)]
         self.assertEqual(headless["spec"]["clusterIP"], "None")

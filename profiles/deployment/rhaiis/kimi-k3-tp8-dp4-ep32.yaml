@@ -7,7 +7,8 @@ spec:
   mode: raw-vllm
   endpoint_path: /v1/models
   runtime:
-    image: vllm/vllm-openai:v0.27.1
+    # Match successful kimi-k3 / InferenceX H200 AgentX bring-up (not stock 0.27.1).
+    image: vllm/vllm-openai:kimi-k3
     service_account_name: benchflow-hostpath-runtime
     replicas: 4
     tensor_parallelism: 8
@@ -48,12 +49,21 @@ spec:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_CACHE: /models/hf/hub
       TRANSFORMERS_OFFLINE: "1"
+      # Match ix-h200-agentx-serve / recipe timeouts and NCCL knobs.
+      VLLM_ENGINE_READY_TIMEOUT_S: "7200"
+      VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: "1800"
+      VLLM_USE_RUST_FRONTEND: "0"
+      VLLM_USE_V2_MODEL_RUNNER: "1"
+      VLLM_ROUTED_DOWN_PROJ_STREAM_TOKEN_THRESHOLD: "0"
+      NCCL_CUMEM_ENABLE: "1"
+      NCCL_DMABUF_ENABLE: "0"
+      PYTHONHASHSEED: "42"
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
     vllm_args:
       - --data-parallel-size=4
-      #- --data-parallel-backend=mp
       - --enable-expert-parallel
       - --gpu-memory-utilization=0.95
-      - --max-model-len=1048576
+      # Omit --max-model-len (IX PR #2353 / model default ~1M).
       - --max-num-seqs=8
       - --max-num-batched-tokens=4096
       - --attention-backend=FLASHMLA
@@ -68,13 +78,20 @@ spec:
       - --enable-auto-tool-choice
       - --tool-call-parser=kimi_k3
       - --reasoning-parser=kimi_k3
+      - --enable-prompt-tokens-details
       - >-
         --speculative-config={"method":"dspark","model":"/models/Kimi-K3-DSpark","num_speculative_tokens":2,"draft_sample_method":"probabilistic","rejection_sample_method":"synthetic","synthetic_acceptance_length":2.51}
+      - >-
+        --compilation-config={"pass_config":{"fuse_allreduce_rms":false}}
   options:
     # /mnt/local/kimi-k3/models is mounted at /models on every selected node.
     model_path: /models/Kimi-K3
     distributed:
       enabled: true
+      # IX_AGG: --nnodes/--node-rank/--master-addr + profile --data-parallel-size.
+      launch_style: ix-agg
+      # Rank 0 sleeps this many seconds so workers start first (deploy.sh order).
+      head_start_delay_seconds: 45
       master_port: 29500
       # Required for multi-node NCCL/ZMQ (same as kimi-k3 vllm-recipe STS).
       # Rank comes from POD_NAME (StatefulSet ordinal), not HOSTNAME.
