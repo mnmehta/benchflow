@@ -898,6 +898,34 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
     )
     container_spec["env"] = container_env
 
+    # Under hostNetwork, Gloo/NCCL must bind the node Ethernet iface — otherwise
+    # Gloo advertises 127.0.0.1 and DP mesh init fails (same as kimi-k3 recipe).
+    host_network = bool(distributed.get("host_network", False))
+    socket_iface_preamble = ""
+    if host_network:
+        socket_iface_preamble = (
+            'if [ -z "${GLOO_SOCKET_IFNAME:-}" ] || '
+            '[ -z "${NCCL_SOCKET_IFNAME:-}" ]; then\n'
+            '  _iface=""\n'
+            '  for _cand in $(ls /sys/class/net 2>/dev/null '
+            "| grep -E '^enp' | sort); do _iface=\"$_cand\"; break; done\n"
+            '  if [ -z "${_iface}" ]; then\n'
+            '    for _cand in $(ls /sys/class/net 2>/dev/null '
+            "| grep -E '^(eth|bond)'); do _iface=\"$_cand\"; break; done\n"
+            "  fi\n"
+            '  if [ -z "${_iface}" ]; then\n'
+            '    for _cand in $(ls /sys/class/net 2>/dev/null '
+            "| grep -vE '^(lo|docker|cni|flannel|veth|cali|tunl|lxc|"
+            "cilium|ibs|ib|mlx)'); do _iface=\"$_cand\"; break; done\n"
+            "  fi\n"
+            '  _iface="${_iface:-eth0}"\n'
+            '  export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-${_iface}}"\n'
+            '  export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${_iface}}"\n'
+            '  echo "hostNetwork socket iface '
+            'GLOO=${GLOO_SOCKET_IFNAME} NCCL=${NCCL_SOCKET_IFNAME}" >&2\n'
+            "fi\n"
+        )
+
     if launch_style == "ix-agg":
         # InferenceX / kimi-k3 image: vllm serve + --nnodes/--node-rank/
         # --master-addr with --data-parallel-size (profile-owned). Rank 0 delays
@@ -913,7 +941,8 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             f"--nnodes={runtime.replicas}",
         ]
         launch_script = (
-            'node_rank=${POD_NAME##*-}\n'
+            socket_iface_preamble
+            + 'node_rank=${POD_NAME##*-}\n'
             'if [ -z "${POD_IP}" ]; then\n'
             '  echo "POD_IP is empty; cannot set --master-addr" >&2\n'
             "  exit 1\n"
@@ -953,7 +982,8 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             f"--data-parallel-rpc-port={master_port}",
         ]
         launch_script = (
-            'node_rank=${POD_NAME##*-}\n'
+            socket_iface_preamble
+            + 'node_rank=${POD_NAME##*-}\n'
             'if [ -z "${POD_IP}" ]; then\n'
             '  echo "POD_IP is empty; cannot set --data-parallel-address" >&2\n'
             "  exit 1\n"
