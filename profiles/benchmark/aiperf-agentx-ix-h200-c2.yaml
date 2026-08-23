@@ -31,9 +31,9 @@ spec:
     failed_request_threshold: 0.1
     trajectory_start_min_ratio: 0.25
     trajectory_start_max_ratio: 0.75
-    warmup_requests_per_lane: 10
+    warmup_request_count: 20  # IX --warmup-requests-per-lane 10 × C=2
     warmup_grace_period: 1800
-    trace_idle_gap_cap_seconds: 300
+    # omit trace_idle_gap_cap_seconds: BenchFlow aiperf AgentX scenario forbids it
     num_dataset_entries: 393
     slice_duration: 1.0
     # Warmup + 1h measure + slack (BenchFlow process timeout, not AIPerf)
