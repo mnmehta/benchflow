@@ -633,7 +633,9 @@ def _rhaiis_raw_vllm_uses_model_pvc(plan: ResolvedRunPlan) -> bool:
     return not str(plan.deployment.options.get("model_path") or "").strip()
 
 
-def _rhaiis_raw_vllm_runtime_env(plan: ResolvedRunPlan) -> list[dict[str, Any]]:
+def _rhaiis_raw_vllm_runtime_env(
+    plan: ResolvedRunPlan, *, home: str = "/tmp/vllm-home"
+) -> list[dict[str, Any]]:
     if _rhaiis_raw_vllm_uses_model_pvc(plan):
         mount_root = plan.deployment.model_storage.mount_path.rstrip("/")
         cache_dir = f"{mount_root}{plan.deployment.model_storage.cache_dir.rstrip('/')}"
@@ -652,7 +654,7 @@ def _rhaiis_raw_vllm_runtime_env(plan: ResolvedRunPlan) -> list[dict[str, Any]]:
         )
         cache_dir = str(cache_root / "hf")
     env = {
-        "HOME": "/tmp/vllm-home",
+        "HOME": home,
         "HF_HOME": cache_dir,
         "TRANSFORMERS_CACHE": f"{cache_dir}/hub",
         "HF_HUB_CACHE": f"{cache_dir}/hub",
@@ -749,6 +751,230 @@ def _rhaiis_vllm_serve_argv(command: list[Any], args: list[Any]) -> list[str]:
     raise ValidationError(
         "rhaiis distributed raw-vllm requires --model=… in container args "
         "(or an existing vllm serve command)"
+    )
+
+
+def _rhaiis_needs_humming_situ_patch(vllm_args: list[Any]) -> bool:
+    """True when serve argv selects humming MoE (needs SITU allowlist)."""
+    return any(
+        "moe-backend=humming" in str(arg) or str(arg) == "humming"
+        for arg in vllm_args
+    )
+
+
+def _rhaiis_humming_situ_preamble() -> str:
+    """In-pod patch for MoEActivation.SITU (vLLM PR #50510 allowlist only).
+
+    The kimi-k3 / InferenceX ``vllm/vllm-openai:kimi-k3`` image ships humming
+    without SITU on the fused_humming_moe allowlist; Kimi-K3 activation fails
+    unless this line is present before ``vllm serve``.
+    """
+    return (
+        'echo "applying humming MoEActivation.SITU allowlist patch" >&2\n'
+        "python3 - <<'PY'\n"
+        "from pathlib import Path\n"
+        "path = Path(\n"
+        '    "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/'
+        'layers/fused_moe/experts/fused_humming_moe.py"\n'
+        ")\n"
+        "if not path.is_file():\n"
+        '    raise SystemExit(f"humming experts file not found: {path}")\n'
+        "text = path.read_text()\n"
+        'if "MoEActivation.SITU" in text:\n'
+        '    print("already patched (SITU present)")\n'
+        "else:\n"
+        '    needle = "            MoEActivation.SWIGLUOAI,\\n"\n'
+        "    insert = needle + "
+        '"            MoEActivation.SITU,\\n"\n'
+        "    if needle not in text:\n"
+        '        raise SystemExit("SWIGLUOAI allowlist line not found")\n'
+        "    bak = path.with_suffix(path.suffix + '.bak-pre-situ')\n"
+        "    if not bak.exists():\n"
+        "        bak.write_text(text)\n"
+        "    path.write_text(text.replace(needle, insert, 1))\n"
+        '    print("inserted MoEActivation.SITU")\n'
+        "cache = path.parent / '__pycache__'\n"
+        "if cache.is_dir():\n"
+        "    for pyc in cache.glob('fused_humming_moe*.pyc'):\n"
+        "        pyc.unlink(missing_ok=True)\n"
+        "PY\n"
+    )
+
+
+def _rhaiis_mamba_hybrid_preamble() -> str:
+    """In-pod patch for int32 idx_mapping fill (vLLM PR #50327).
+
+    Model Runner V2 ``idx_mapping`` is int32 (PP may use -1 sentinels). The
+    scalar branch of ``MambaHybridModelState.postprocess_state`` used
+    ``index_fill_``, which requires int64 and does not skip sentinels — see
+    issue #50947. kimi-k3's recipe applies the same Triton ``_fill_num_accepted_kernel``
+    replacement at serve start when the image predates the merge.
+    """
+    # Keep needle/patch text identical to scripts/run-vllm-kimi-k3-recipe.sh.
+    return r'''echo "applying mamba_hybrid PR #50327 int32 idx_mapping patch" >&2
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path(
+    "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/model_states/mamba_hybrid.py"
+)
+if not path.is_file():
+    print(f"mamba_hybrid.py not found ({path}); skipping")
+    raise SystemExit(0)
+src = path.read_text()
+if "_fill_num_accepted_kernel" in src:
+    print("already patched (_fill_num_accepted_kernel present)")
+    raise SystemExit(0)
+needle = """        # Chunked prefill does not sample a token, so num_sampled can be 0.
+        # Mamba treats num_accepted_tokens=1 as the neutral non-spec value.
+        if not isinstance(num_sampled, int):
+            # idx_mapping may contain -1 sentinels (filtered rows) under PP; the
+            # kernel skips them rather than scattering with a host-side gather.
+            n = idx_mapping.shape[0]
+            if n:
+                _scatter_num_accepted_kernel[(n,)](
+                    idx_mapping, num_sampled, self.num_accepted_tokens_gpu
+                )
+        else:
+            # Fill with single value.
+            self.num_accepted_tokens_gpu.index_fill_(
+                0, idx_mapping, max(num_sampled, 1)
+            )
+
+        # Align: save the running state to the block-aligned position when
+        # spec-decode acceptance leaves the sequence non-block-aligned (mirrors
+        # the V1 align postprocess). num_computed_tokens already holds the
+        # post-step advanced count.
+        if (
+            self._align_mode
+            and num_computed_tokens is not None
+            and self._mamba_ctx is not None
+        ):
+            num_reqs = idx_mapping.shape[0]
+            if num_reqs:
+                self._mamba_ctx.run_fused_postprocess_align(
+                    num_reqs,
+                    self.num_accepted_tokens_gpu,
+                    self._mamba_state_idx_gpu,
+                    num_computed_tokens,
+                    idx_mapping,
+                )
+
+
+@triton.jit
+def _scatter_num_accepted_kernel(
+    idx_mapping_ptr,  # [num_reqs] batch_idx -> req_state_idx (-1 to skip)
+    num_sampled_ptr,  # [num_reqs]
+    num_accepted_ptr,  # [max_num_reqs]
+):
+    row = tl.program_id(0)
+    req_state_idx = tl.load(idx_mapping_ptr + row)
+    if req_state_idx < 0:
+        return
+    num_sampled = tl.load(num_sampled_ptr + row)
+    tl.store(num_accepted_ptr + req_state_idx, tl.maximum(num_sampled, 1))
+"""
+patch = """        # Chunked prefill does not sample a token, so num_sampled can be 0.
+        # Mamba treats num_accepted_tokens=1 as the neutral non-spec value.
+        # Kimi-K3 harness: PR #50327 — int32 idx_mapping + PP -1 sentinels cannot
+        # use index_fill_ (needs int64; negatives corrupt state). Use Triton fill.
+        num_reqs = idx_mapping.shape[0]
+        if not num_reqs:
+            return
+
+        if not isinstance(num_sampled, int):
+            # idx_mapping may contain -1 sentinels (filtered rows) under PP; the
+            # kernel skips them rather than scattering with a host-side gather.
+            _scatter_num_accepted_kernel[(num_reqs,)](
+                idx_mapping, num_sampled, self.num_accepted_tokens_gpu
+            )
+        else:
+            # Fill with single value.
+            _fill_num_accepted_kernel[(num_reqs,)](
+                idx_mapping, self.num_accepted_tokens_gpu, max(num_sampled, 1)
+            )
+
+        # Align: save the running state to the block-aligned position when
+        # spec-decode acceptance leaves the sequence non-block-aligned (mirrors
+        # the V1 align postprocess). num_computed_tokens already holds the
+        # post-step advanced count.
+        if (
+            self._align_mode
+            and num_computed_tokens is not None
+            and self._mamba_ctx is not None
+        ):
+            self._mamba_ctx.run_fused_postprocess_align(
+                num_reqs,
+                self.num_accepted_tokens_gpu,
+                self._mamba_state_idx_gpu,
+                num_computed_tokens,
+                idx_mapping,
+            )
+
+
+@triton.jit
+def _scatter_num_accepted_kernel(
+    idx_mapping_ptr,  # [num_reqs] batch_idx -> req_state_idx (-1 to skip)
+    num_sampled_ptr,  # [num_reqs]
+    num_accepted_ptr,  # [max_num_reqs]
+):
+    row = tl.program_id(0)
+    req_state_idx = tl.load(idx_mapping_ptr + row)
+    if req_state_idx < 0:
+        return
+    num_sampled = tl.load(num_sampled_ptr + row)
+    tl.store(num_accepted_ptr + req_state_idx, tl.maximum(num_sampled, 1))
+
+
+@triton.jit
+def _fill_num_accepted_kernel(
+    idx_mapping_ptr,  # [num_reqs] batch_idx -> req_state_idx (-1 to skip)
+    num_accepted_ptr,  # [max_num_reqs]
+    num_sampled,
+):
+    row = tl.program_id(0)
+    req_state_idx = tl.load(idx_mapping_ptr + row)
+    if req_state_idx < 0:
+        return
+    tl.store(num_accepted_ptr + req_state_idx, num_sampled)
+"""
+if needle not in src:
+    raise SystemExit(f"mamba_hybrid PR#50327 patch needle missing in {path}")
+bak = path.with_suffix(path.suffix + ".bak-pre-50327")
+if not bak.exists():
+    bak.write_text(src)
+path.write_text(src.replace(needle, patch, 1))
+cache = path.parent / "__pycache__"
+if cache.is_dir():
+    for pyc in cache.glob("mamba_hybrid*.pyc"):
+        pyc.unlink(missing_ok=True)
+print(f"patched {path} (PR #50327 int32 idx_mapping fill)")
+PY
+'''
+
+
+def _rhaiis_host_network_socket_iface_preamble() -> str:
+    return (
+        'if [ -z "${GLOO_SOCKET_IFNAME:-}" ] || '
+        '[ -z "${NCCL_SOCKET_IFNAME:-}" ]; then\n'
+        '  _iface=""\n'
+        '  for _cand in $(ls /sys/class/net 2>/dev/null '
+        "| grep -E '^enp' | sort); do _iface=\"$_cand\"; break; done\n"
+        '  if [ -z "${_iface}" ]; then\n'
+        '    for _cand in $(ls /sys/class/net 2>/dev/null '
+        "| grep -E '^(eth|bond)'); do _iface=\"$_cand\"; break; done\n"
+        "  fi\n"
+        '  if [ -z "${_iface}" ]; then\n'
+        '    for _cand in $(ls /sys/class/net 2>/dev/null '
+        "| grep -vE '^(lo|docker|cni|flannel|veth|cali|tunl|lxc|"
+        "cilium|ibs|ib|mlx)'); do _iface=\"$_cand\"; break; done\n"
+        "  fi\n"
+        '  _iface="${_iface:-eth0}"\n'
+        '  export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-${_iface}}"\n'
+        '  export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${_iface}}"\n'
+        '  echo "hostNetwork socket iface '
+        'GLOO=${GLOO_SOCKET_IFNAME} NCCL=${NCCL_SOCKET_IFNAME}" >&2\n'
+        "fi\n"
     )
 
 
@@ -903,28 +1129,19 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
     host_network = bool(distributed.get("host_network", False))
     socket_iface_preamble = ""
     if host_network:
-        socket_iface_preamble = (
-            'if [ -z "${GLOO_SOCKET_IFNAME:-}" ] || '
-            '[ -z "${NCCL_SOCKET_IFNAME:-}" ]; then\n'
-            '  _iface=""\n'
-            '  for _cand in $(ls /sys/class/net 2>/dev/null '
-            "| grep -E '^enp' | sort); do _iface=\"$_cand\"; break; done\n"
-            '  if [ -z "${_iface}" ]; then\n'
-            '    for _cand in $(ls /sys/class/net 2>/dev/null '
-            "| grep -E '^(eth|bond)'); do _iface=\"$_cand\"; break; done\n"
-            "  fi\n"
-            '  if [ -z "${_iface}" ]; then\n'
-            '    for _cand in $(ls /sys/class/net 2>/dev/null '
-            "| grep -vE '^(lo|docker|cni|flannel|veth|cali|tunl|lxc|"
-            "cilium|ibs|ib|mlx)'); do _iface=\"$_cand\"; break; done\n"
-            "  fi\n"
-            '  _iface="${_iface:-eth0}"\n'
-            '  export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-${_iface}}"\n'
-            '  export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${_iface}}"\n'
-            '  echo "hostNetwork socket iface '
-            'GLOO=${GLOO_SOCKET_IFNAME} NCCL=${NCCL_SOCKET_IFNAME}" >&2\n'
-            "fi\n"
-        )
+        socket_iface_preamble = _rhaiis_host_network_socket_iface_preamble()
+
+    humming_situ_preamble = ""
+    if _rhaiis_needs_humming_situ_patch(runtime.vllm_args):
+        humming_situ_preamble = _rhaiis_humming_situ_preamble()
+
+    # Always attempt on distributed Kimi launches: PP/DP hybrid paths hit the
+    # int32 idx_mapping bug; no-op when the image already has PR #50327.
+    mamba_preamble = _rhaiis_mamba_hybrid_preamble()
+
+    launch_preamble = (
+        socket_iface_preamble + humming_situ_preamble + mamba_preamble
+    )
 
     if launch_style == "ix-agg":
         # InferenceX / kimi-k3 image: vllm serve + --nnodes/--node-rank/
@@ -941,7 +1158,7 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             f"--nnodes={runtime.replicas}",
         ]
         launch_script = (
-            socket_iface_preamble
+            launch_preamble
             + 'node_rank=${POD_NAME##*-}\n'
             'if [ -z "${POD_IP}" ]; then\n'
             '  echo "POD_IP is empty; cannot set --master-addr" >&2\n'
@@ -982,7 +1199,7 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             f"--data-parallel-rpc-port={master_port}",
         ]
         launch_script = (
-            socket_iface_preamble
+            launch_preamble
             + 'node_rank=${POD_NAME##*-}\n'
             'if [ -z "${POD_IP}" ]; then\n'
             '  echo "POD_IP is empty; cannot set --data-parallel-address" >&2\n'

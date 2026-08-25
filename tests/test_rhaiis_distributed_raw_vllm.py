@@ -113,6 +113,8 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         self.assertIn("GLOO_SOCKET_IFNAME", script)
         self.assertIn("NCCL_SOCKET_IFNAME", script)
         self.assertIn("/sys/class/net", script)
+        self.assertIn("applying mamba_hybrid PR #50327", script)
+        self.assertIn("_fill_num_accepted_kernel", script)
         joined = " ".join(str(a) for a in container["args"])
         self.assertIn("vllm", container["args"])
         self.assertIn("serve", container["args"])
