@@ -1,0 +1,37 @@
+# GuideLLM equivalent of the kimi-k3 vllm-bench 1000/1000 concurrency sweep
+# (C ∈ {1…512} powers of two) used in:
+#   https://mnmehta.github.io/kimi-k3/
+#   https://mnmehta.github.io/kimi-k3/pp2-marlin-vs-humming-1000-1000.html
+#
+# Closest existing profile: guidellm-concurrent-1k-1k (same 1000/1000 synthetic
+# text + concurrent profile). This variant widens streams to the report's pow2
+# ladder; keep the same per-stream max_duration as stock concurrent-1k-1k.
+apiVersion: benchflow.io/v1alpha1
+kind: BenchmarkProfile
+metadata:
+  name: guidellm-concurrent-1k-1k-pow2
+spec:
+  guidellm:
+    backend:
+      kind: openai_http
+    profile:
+      kind: concurrent
+    override:
+      # Match scripts/bench-concurrency-sweep.sh CONCURRENCIES default.
+      # GuideLLM runs high→low like other BenchFlow concurrent profiles.
+      profile.streams: [512, 256, 128, 64, 32, 16, 8, 4, 2, 1]
+    data:
+      kind: synthetic_text
+      prompt_tokens: 1000
+      output_tokens: 1000
+    constraint:
+      # Per stream (not whole sweep). Same budget as guidellm-concurrent-1k-1k;
+      # kimi-k3 vllm-bench targets ~120s/tier — 600s is already 5× that headroom.
+      - kind: max_duration
+        seconds: 600
+    tokenizer:
+      kind: huggingface_auto
+      load_kwargs:
+        trust_remote_code: true
+  env:
+    GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL: "DEBUG"

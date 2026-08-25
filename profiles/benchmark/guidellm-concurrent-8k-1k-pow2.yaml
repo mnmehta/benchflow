@@ -1,0 +1,29 @@
+# GuideLLM 8000/1000 concurrency sweep (pow2 streams), companion to
+# guidellm-concurrent-1k-1k-pow2. Stream ladder matches stock
+# guidellm-concurrent-8k-1k (C≤64 — long context can't saturate like 1k/1k).
+apiVersion: benchflow.io/v1alpha1
+kind: BenchmarkProfile
+metadata:
+  name: guidellm-concurrent-8k-1k-pow2
+spec:
+  guidellm:
+    backend:
+      kind: openai_http
+    profile:
+      kind: concurrent
+    override:
+      # Same ladder as profiles/benchmark/concurrent-8k-1k.yaml.
+      profile.streams: [64, 32, 16, 8, 4, 2, 1]
+    data:
+      kind: synthetic_text
+      prompt_tokens: 8000
+      output_tokens: 1000
+    constraint:
+      - kind: max_duration
+        seconds: 600
+    tokenizer:
+      kind: huggingface_auto
+      load_kwargs:
+        trust_remote_code: true
+  env:
+    GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL: "DEBUG"
