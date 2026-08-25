@@ -36,6 +36,7 @@ _EXECUTION_RELEASE_SCOPE_LABEL = "benchflow.io/execution-release-scope"
 _MATRIX_RELEASE_MAX_LENGTH = 42
 _PVC_CLAIM_MAX_LENGTH = 253
 _MAX_MODEL_LEN_FLAG = "--max-model-len"
+_CONTEXT_LENGTH_FLAG = "--context-length"
 _UNSUPPORTED_BENCHMARK_ENV = {
     "GUIDELLM_OUTPUT_PATH": (
         "GUIDELLM_OUTPUT_PATH is not supported in benchmark env overrides; "
@@ -441,10 +442,11 @@ def _target_for(
             endpoint_scope=endpoint_scope,
         )
 
-    if platform == "rhaiis" and mode == "raw-vllm":
+    if platform == "rhaiis" and mode in {"raw-vllm", "raw-sglang"}:
+        port = 30000 if mode == "raw-sglang" else 8000
         return TargetSpec(
             discovery="static",
-            base_url=f"http://{release_name}.{namespace}.svc.cluster.local:8000",
+            base_url=f"http://{release_name}.{namespace}.svc.cluster.local:{port}",
             path=path,
             endpoint_scope=endpoint_scope,
         )
@@ -477,19 +479,19 @@ def _parse_positive_int(value: str, *, field_name: str) -> int:
     return parsed
 
 
-def _strip_max_model_len(
-    args: list[str], *, field_name: str
+def _strip_int_flag(
+    args: list[str], *, flag: str, field_name: str
 ) -> tuple[list[str], int | None]:
     cleaned: list[str] = []
     resolved: int | None = None
     index = 0
     while index < len(args):
         item = str(args[index]).strip()
-        if item.startswith(f"{_MAX_MODEL_LEN_FLAG}="):
+        if item.startswith(f"{flag}="):
             resolved = _parse_positive_int(item.split("=", 1)[1], field_name=field_name)
             index += 1
             continue
-        if item == _MAX_MODEL_LEN_FLAG:
+        if item == flag:
             if index + 1 >= len(args):
                 raise ValidationError(f"{field_name} is missing a value")
             resolved = _parse_positive_int(args[index + 1], field_name=field_name)
@@ -500,29 +502,58 @@ def _strip_max_model_len(
     return cleaned, resolved
 
 
+def _resolve_length_args(
+    *,
+    deployment_args: list[str],
+    benchmark_min_max_model_len: int | None,
+    flag: str,
+    field_name: str,
+) -> list[str]:
+    base_args, deployment_length = _strip_int_flag(
+        deployment_args,
+        flag=flag,
+        field_name=field_name,
+    )
+    candidates = [
+        value
+        for value in (
+            deployment_length,
+            benchmark_min_max_model_len,
+        )
+        if value is not None
+    ]
+    resolved_length = max(candidates) if candidates else None
+
+    resolved_args = list(base_args)
+    if resolved_length is not None:
+        resolved_args.append(f"{flag}={resolved_length}")
+    return resolved_args
+
+
 def _resolve_vllm_args(
     *,
     deployment_args: list[str],
     benchmark_min_max_model_len: int | None,
 ) -> list[str]:
-    base_args, deployment_max_model_len = _strip_max_model_len(
-        deployment_args,
+    return _resolve_length_args(
+        deployment_args=deployment_args,
+        benchmark_min_max_model_len=benchmark_min_max_model_len,
+        flag=_MAX_MODEL_LEN_FLAG,
         field_name="deployment runtime max-model-len",
     )
-    candidates = [
-        value
-        for value in (
-            deployment_max_model_len,
-            benchmark_min_max_model_len,
-        )
-        if value is not None
-    ]
-    resolved_max_model_len = max(candidates) if candidates else None
 
-    resolved_args = list(base_args)
-    if resolved_max_model_len is not None:
-        resolved_args.append(f"{_MAX_MODEL_LEN_FLAG}={resolved_max_model_len}")
-    return resolved_args
+
+def _resolve_sglang_args(
+    *,
+    deployment_args: list[str],
+    benchmark_min_max_model_len: int | None,
+) -> list[str]:
+    return _resolve_length_args(
+        deployment_args=deployment_args,
+        benchmark_min_max_model_len=benchmark_min_max_model_len,
+        flag=_CONTEXT_LENGTH_FLAG,
+        field_name="deployment runtime context-length",
+    )
 
 
 def _scalar_model_override(value, fallback):
@@ -574,6 +605,19 @@ def _merge_model_override(
             vllm_extra_args=[
                 *base.runtime.vllm_extra_args,
                 *model_override.runtime.vllm_extra_args,
+            ],
+            sglang_args=(
+                list(model_override.runtime.sglang_args)
+                if model_override.runtime.sglang_args is not None
+                else (
+                    list(base.runtime.sglang_args)
+                    if base.runtime.sglang_args is not None
+                    else None
+                )
+            ),
+            sglang_extra_args=[
+                *base.runtime.sglang_extra_args,
+                *model_override.runtime.sglang_extra_args,
             ],
             host_paths=_scalar_model_override(
                 model_override.runtime.host_paths,
@@ -729,16 +773,49 @@ def resolve_run_plan(
             if tp_override is not None
             else deployment_profile.spec.runtime.tensor_parallelism
         ),
-        vllm_args=_resolve_vllm_args(
-            deployment_args=[
+        vllm_args=(
+            _resolve_vllm_args(
+                deployment_args=[
+                    *(
+                        overrides.runtime.vllm_args
+                        if overrides.runtime.vllm_args is not None
+                        else deployment_profile.spec.runtime.vllm_args
+                    ),
+                    *overrides.runtime.vllm_extra_args,
+                ],
+                benchmark_min_max_model_len=benchmark_profile.spec.requirements.min_max_model_len,
+            )
+            if deployment_profile.spec.mode != "raw-sglang"
+            else [
                 *(
                     overrides.runtime.vllm_args
                     if overrides.runtime.vllm_args is not None
                     else deployment_profile.spec.runtime.vllm_args
                 ),
                 *overrides.runtime.vllm_extra_args,
-            ],
-            benchmark_min_max_model_len=benchmark_profile.spec.requirements.min_max_model_len,
+            ]
+        ),
+        sglang_args=(
+            _resolve_sglang_args(
+                deployment_args=[
+                    *(
+                        overrides.runtime.sglang_args
+                        if overrides.runtime.sglang_args is not None
+                        else deployment_profile.spec.runtime.sglang_args
+                    ),
+                    *overrides.runtime.sglang_extra_args,
+                ],
+                benchmark_min_max_model_len=benchmark_profile.spec.requirements.min_max_model_len,
+            )
+            if deployment_profile.spec.mode == "raw-sglang"
+            else [
+                *(
+                    overrides.runtime.sglang_args
+                    if overrides.runtime.sglang_args is not None
+                    else deployment_profile.spec.runtime.sglang_args
+                ),
+                *overrides.runtime.sglang_extra_args,
+            ]
         ),
         env={
             **deployment_profile.spec.runtime.env,

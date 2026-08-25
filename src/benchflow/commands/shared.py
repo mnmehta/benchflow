@@ -355,6 +355,14 @@ def experiment_from_args(args: argparse.Namespace) -> Experiment:
             vllm_extra_args=list(
                 base_experiment.spec.overrides.runtime.vllm_extra_args
             ),
+            sglang_args=(
+                list(base_experiment.spec.overrides.runtime.sglang_args)
+                if base_experiment.spec.overrides.runtime.sglang_args is not None
+                else None
+            ),
+            sglang_extra_args=list(
+                base_experiment.spec.overrides.runtime.sglang_extra_args
+            ),
             host_paths=(
                 deepcopy(base_experiment.spec.overrides.runtime.host_paths)
                 if base_experiment.spec.overrides.runtime.host_paths is not None

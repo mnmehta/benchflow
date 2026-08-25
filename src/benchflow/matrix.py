@@ -231,6 +231,15 @@ def expand_experiment_matrix(experiment: Experiment) -> list[Experiment]:
                             vllm_extra_args=list(
                                 experiment.spec.overrides.runtime.vllm_extra_args
                             ),
+                            sglang_args=(
+                                list(experiment.spec.overrides.runtime.sglang_args)
+                                if experiment.spec.overrides.runtime.sglang_args
+                                is not None
+                                else None
+                            ),
+                            sglang_extra_args=list(
+                                experiment.spec.overrides.runtime.sglang_extra_args
+                            ),
                             host_paths=(
                                 deepcopy(experiment.spec.overrides.runtime.host_paths)
                                 if experiment.spec.overrides.runtime.host_paths

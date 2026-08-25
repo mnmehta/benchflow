@@ -290,7 +290,7 @@ def generate_plan_report(
         else (plan.deployment.runtime.tensor_parallelism if plan is not None else 1)
     )
     resolved_runtime_args = runtime_args or (
-        " ".join(plan.deployment.runtime.vllm_args) if plan is not None else ""
+        " ".join(plan.deployment.runtime.engine_args()) if plan is not None else ""
     )
     resolved_replicas = (
         replicas

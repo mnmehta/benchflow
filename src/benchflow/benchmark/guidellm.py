@@ -43,7 +43,7 @@ def _iso8601_now() -> str:
 
 
 def _runtime_args(plan: ResolvedRunPlan) -> str:
-    return " ".join(plan.deployment.runtime.vllm_args)
+    return " ".join(plan.deployment.runtime.engine_args())
 
 
 def _join_optional_values(values: list[object] | None) -> str | None:

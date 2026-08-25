@@ -1029,7 +1029,7 @@ def collect_artifacts(
             or plan.deployment.options.get("accelerator")
             or ""
         ),
-        "runtime_args": " ".join(plan.deployment.runtime.vllm_args),
+        "runtime_args": " ".join(plan.deployment.runtime.engine_args()),
         "replicas": plan.deployment.runtime.replicas,
         "tp": plan.deployment.runtime.tensor_parallelism,
         "data_spec": (

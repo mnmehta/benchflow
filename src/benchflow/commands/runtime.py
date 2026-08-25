@@ -755,7 +755,7 @@ def cmd_benchmark_report(args: argparse.Namespace) -> int:
         else (plan.deployment.runtime.tensor_parallelism if plan is not None else 1)
     )
     runtime_args = args.runtime_args or (
-        " ".join(plan.deployment.runtime.vllm_args) if plan is not None else ""
+        " ".join(plan.deployment.runtime.engine_args()) if plan is not None else ""
     )
     replicas = (
         args.replicas

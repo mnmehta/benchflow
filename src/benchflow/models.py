@@ -292,6 +292,8 @@ class OverrideRuntimeSpec:
     env: dict[str, str] = field(default_factory=dict)
     vllm_args: list[str] | None = None
     vllm_extra_args: list[str] = field(default_factory=list)
+    sglang_args: list[str] | None = None
+    sglang_extra_args: list[str] = field(default_factory=list)
     host_paths: list["RuntimeHostPathSpec"] | None = None
     service_account_name: str | None = None
     node_selector: dict[str, str] | None = None
@@ -398,6 +400,7 @@ class RuntimeSpec:
     replicas: int = 1
     tensor_parallelism: int = 1
     vllm_args: list[str] = field(default_factory=list)
+    sglang_args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     shared_memory_size: str = ""
     host_paths: list[RuntimeHostPathSpec] = field(default_factory=list)
@@ -409,6 +412,9 @@ class RuntimeSpec:
     tolerations: list[dict[str, Any]] = field(default_factory=list)
     image_pull_secrets: list[dict[str, str]] = field(default_factory=list)
     resources: RuntimeResourcesSpec = field(default_factory=RuntimeResourcesSpec)
+
+    def engine_args(self) -> list[str]:
+        return list(self.sglang_args or self.vllm_args)
 
 
 @dataclass(slots=True)

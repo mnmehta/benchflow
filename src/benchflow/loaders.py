@@ -532,6 +532,20 @@ def _overrides_from_dict(
                 )
                 or []
             ),
+            sglang_args=(
+                _string_list(
+                    runtime.get("sglang_args"), f"{field_name}.runtime.sglang_args"
+                )
+                if "sglang_args" in runtime
+                else None
+            ),
+            sglang_extra_args=(
+                _string_list(
+                    runtime.get("sglang_extra_args"),
+                    f"{field_name}.runtime.sglang_extra_args",
+                )
+                or []
+            ),
             host_paths=(
                 _runtime_host_paths_from_dict(
                     runtime.get("host_paths"), f"{field_name}.runtime.host_paths"
@@ -724,6 +738,7 @@ def _runtime_from_dict(raw: dict[str, Any] | None) -> RuntimeSpec:
         replicas=int(raw.get("replicas", 1)),
         tensor_parallelism=int(raw.get("tensor_parallelism", 1)),
         vllm_args=[str(item) for item in (raw.get("vllm_args") or [])],
+        sglang_args=[str(item) for item in (raw.get("sglang_args") or [])],
         env=env,
         shared_memory_size=_optional_string(raw.get("shared_memory_size")),
         host_paths=_runtime_host_paths_from_dict(
@@ -821,6 +836,80 @@ def _rhaiis_raw_vllm_options_from_dict(raw: Any) -> dict[str, Any]:
         if launch_style not in {"ix-agg", "external-dp"}:
             raise ValidationError(
                 "spec.options.distributed.launch_style must be 'ix-agg' or 'external-dp'"
+            )
+        head_start_delay_seconds = int(
+            distributed_raw.get("head_start_delay_seconds", 45)
+        )
+        if head_start_delay_seconds < 0:
+            raise ValidationError(
+                "spec.options.distributed.head_start_delay_seconds must be >= 0"
+            )
+        normalized["distributed"] = {
+            "enabled": enabled,
+            "master_port": master_port,
+            "host_network": _as_bool(distributed_raw.get("host_network"), False),
+            "host_ipc": _as_bool(distributed_raw.get("host_ipc"), False),
+            "launch_style": launch_style,
+            "head_start_delay_seconds": head_start_delay_seconds,
+        }
+    return normalized
+
+
+def _rhaiis_raw_sglang_options_from_dict(raw: Any) -> dict[str, Any]:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValidationError("spec.options must be a mapping")
+    unknown = sorted(set(raw) - {"model_path", "distributed"})
+    if unknown:
+        raise ValidationError(
+            "unsupported rhaiis raw-sglang spec.options fields: " + ", ".join(unknown)
+        )
+
+    normalized: dict[str, Any] = {}
+    model_path = str(raw.get("model_path") or "").strip()
+    if model_path:
+        if not model_path.startswith("/"):
+            raise ValidationError(
+                "spec.options.model_path must be an absolute container path"
+            )
+        normalized["model_path"] = model_path
+
+    distributed_raw = raw.get("distributed") or {}
+    if not isinstance(distributed_raw, dict):
+        raise ValidationError("spec.options.distributed must be a mapping")
+    unknown_distributed = sorted(
+        set(distributed_raw)
+        - {
+            "enabled",
+            "master_port",
+            "host_network",
+            "host_ipc",
+            "launch_style",
+            "head_start_delay_seconds",
+        }
+    )
+    if unknown_distributed:
+        raise ValidationError(
+            "unsupported spec.options.distributed fields: "
+            + ", ".join(unknown_distributed)
+        )
+    enabled = _as_bool(distributed_raw.get("enabled"), False)
+    if enabled and not model_path:
+        raise ValidationError(
+            "spec.options.model_path is required for distributed raw-sglang"
+        )
+    if distributed_raw or enabled:
+        master_port = int(distributed_raw.get("master_port", 20000))
+        if not 1 <= master_port <= 65535:
+            raise ValidationError(
+                "spec.options.distributed.master_port must be between 1 and 65535"
+            )
+        launch_style = str(
+            distributed_raw.get("launch_style") or "sglang-nnodes"
+        ).strip()
+        if launch_style != "sglang-nnodes":
+            raise ValidationError(
+                "spec.options.distributed.launch_style must be 'sglang-nnodes'"
             )
         head_start_delay_seconds = int(
             distributed_raw.get("head_start_delay_seconds", 45)
@@ -1230,6 +1319,8 @@ def load_deployment_profile(path: Path) -> DeploymentProfile:
         raise ValidationError(f"{path} is missing spec.mode")
     if profile_spec.platform == "rhaiis" and profile_spec.mode == "raw-vllm":
         profile_spec.options = _rhaiis_raw_vllm_options_from_dict(spec.get("options"))
+    if profile_spec.platform == "rhaiis" and profile_spec.mode == "raw-sglang":
+        profile_spec.options = _rhaiis_raw_sglang_options_from_dict(spec.get("options"))
 
     return DeploymentProfile(
         api_version=str(raw.get("apiVersion", "benchflow.io/v1alpha1")),
