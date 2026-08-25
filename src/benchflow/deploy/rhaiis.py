@@ -8,15 +8,18 @@ from ..cluster import CommandError, require_any_command, run_command
 from ..models import ResolvedRunPlan, ValidationError
 from ..renderers.deployment import (
     render_runtime_pvc_manifests,
-    render_rhaiis_raw_vllm_manifests,
-    rhaiis_raw_vllm_deployment_name,
-    rhaiis_raw_vllm_workload_kind,
+    render_rhaiis_raw_manifests,
+    rhaiis_raw_deployment_name,
+    rhaiis_raw_workload_kind,
 )
 from ..ui import detail, step, success
 
 
+_RHAIIS_RAW_MODES = {"raw-vllm", "raw-sglang"}
+
+
 def _ensure_supported_mode(plan: ResolvedRunPlan) -> None:
-    if plan.deployment.mode != "raw-vllm":
+    if plan.deployment.mode not in _RHAIIS_RAW_MODES:
         raise ValidationError(
             f"unsupported RHAIIS deployment mode: {plan.deployment.mode}"
         )
@@ -96,9 +99,9 @@ def deploy_rhaiis(
 
     kubectl_cmd = require_any_command("oc", "kubectl")
     namespace = plan.deployment.namespace
-    workload_name = rhaiis_raw_vllm_deployment_name(plan)
-    workload_kind = rhaiis_raw_vllm_workload_kind(plan)
-    manifests = render_rhaiis_raw_vllm_manifests(plan)
+    workload_name = rhaiis_raw_deployment_name(plan)
+    workload_kind = rhaiis_raw_workload_kind(plan)
+    manifests = render_rhaiis_raw_manifests(plan)
 
     if skip_if_exists and _workload_exists(
         namespace, workload_kind, workload_name, kubectl_cmd
@@ -134,7 +137,7 @@ def deploy_rhaiis(
             input_text=yaml.safe_dump(manifest, sort_keys=False),
         )
     success(
-        f"Applied RHAIIS raw-vLLM {workload_kind} {workload_name} and supporting services in namespace {namespace}"
+        f"Applied RHAIIS {plan.deployment.mode} {workload_kind} {workload_name} and supporting services in namespace {namespace}"
     )
 
     if verify:

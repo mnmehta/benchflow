@@ -1387,6 +1387,458 @@ def render_rhaiis_raw_vllm_manifests(plan: ResolvedRunPlan) -> list[dict[str, An
     return _render_rhaiis_single_raw_vllm_manifests(plan)
 
 
+RHAIIS_RAW_SGLANG_HTTP_PORT = 30000
+
+
+def rhaiis_raw_sglang_deployment_name(plan: ResolvedRunPlan) -> str:
+    return f"{plan.deployment.release_name}-sglang"
+
+
+def rhaiis_raw_sglang_is_distributed(plan: ResolvedRunPlan) -> bool:
+    return rhaiis_raw_vllm_is_distributed(plan)
+
+
+def rhaiis_raw_sglang_workload_kind(plan: ResolvedRunPlan) -> str:
+    return "statefulset" if rhaiis_raw_sglang_is_distributed(plan) else "deployment"
+
+
+def rhaiis_raw_sglang_headless_service_name(plan: ResolvedRunPlan) -> str:
+    return f"{rhaiis_raw_sglang_deployment_name(plan)}-headless"
+
+
+def rhaiis_raw_sglang_service_name(plan: ResolvedRunPlan) -> str:
+    return plan.deployment.release_name
+
+
+def rhaiis_raw_sglang_servicemonitor_name(plan: ResolvedRunPlan) -> str:
+    return f"{plan.deployment.release_name}-sglang"
+
+
+def _rhaiis_raw_sglang_labels(plan: ResolvedRunPlan) -> dict[str, str]:
+    return {
+        **_base_labels(plan),
+        "app.kubernetes.io/component": "raw-sglang",
+        "app.kubernetes.io/instance": plan.deployment.release_name,
+        "benchflow.io/release": plan.deployment.release_name,
+    }
+
+
+def _rhaiis_raw_sglang_selector_labels(plan: ResolvedRunPlan) -> dict[str, str]:
+    return {
+        "app.kubernetes.io/component": "raw-sglang",
+        "app.kubernetes.io/instance": plan.deployment.release_name,
+        "benchflow.io/release": plan.deployment.release_name,
+    }
+
+
+def _rhaiis_raw_sglang_container(plan: ResolvedRunPlan) -> dict[str, Any]:
+    volume_mounts, _ = _rhaiis_raw_vllm_storage(plan)
+    return {
+        "name": "sglang",
+        "image": plan.deployment.runtime.image,
+        "command": ["sglang", "serve"],
+        "args": [
+            "--trust-remote-code",
+            f"--model-path={_rhaiis_raw_vllm_model_path(plan)}",
+            f"--tp-size={plan.deployment.runtime.tensor_parallelism}",
+            "--host=0.0.0.0",
+            f"--port={RHAIIS_RAW_SGLANG_HTTP_PORT}",
+            *plan.deployment.runtime.sglang_args,
+        ],
+        "env": _rhaiis_raw_vllm_runtime_env(plan, home="/tmp/sglang-home"),
+        "ports": [
+            {
+                "containerPort": RHAIIS_RAW_SGLANG_HTTP_PORT,
+                "name": "http",
+                "protocol": "TCP",
+            }
+        ],
+        "readinessProbe": {
+            "httpGet": {"path": "/health", "port": "http"},
+            "periodSeconds": 10,
+            "timeoutSeconds": 5,
+            "failureThreshold": 3,
+        },
+        "resources": _runtime_resource_requirements(plan, include_gpu=True),
+        "volumeMounts": volume_mounts,
+    }
+
+
+def _render_rhaiis_single_raw_sglang_manifests(
+    plan: ResolvedRunPlan,
+) -> list[dict[str, Any]]:
+    labels = _rhaiis_raw_sglang_labels(plan)
+    selector_labels = _rhaiis_raw_sglang_selector_labels(plan)
+    container_spec = _rhaiis_raw_sglang_container(plan)
+    pod_spec = _rhaiis_raw_vllm_pod_spec(plan, container_spec)
+    deployment = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": rhaiis_raw_sglang_deployment_name(plan),
+            "namespace": plan.deployment.namespace,
+            "labels": labels,
+        },
+        "spec": {
+            "progressDeadlineSeconds": RAHIIS_PROGRESS_DEADLINE_SECONDS,
+            "replicas": plan.deployment.runtime.replicas,
+            "selector": {"matchLabels": selector_labels},
+            "template": {
+                "metadata": {"labels": {**labels, **selector_labels}},
+                "spec": pod_spec,
+            },
+        },
+    }
+    service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": rhaiis_raw_sglang_service_name(plan),
+            "namespace": plan.deployment.namespace,
+            "labels": labels,
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "selector": selector_labels,
+            "ports": [
+                {
+                    "name": "http",
+                    "port": RHAIIS_RAW_SGLANG_HTTP_PORT,
+                    "protocol": "TCP",
+                    "targetPort": "http",
+                }
+            ],
+        },
+    }
+    servicemonitor = {
+        "apiVersion": "monitoring.coreos.com/v1",
+        "kind": "ServiceMonitor",
+        "metadata": {
+            "name": rhaiis_raw_sglang_servicemonitor_name(plan),
+            "namespace": plan.deployment.namespace,
+            "labels": labels,
+        },
+        "spec": {
+            "selector": {"matchLabels": selector_labels},
+            "namespaceSelector": {"matchNames": [plan.deployment.namespace]},
+            "endpoints": [
+                {
+                    "path": "/metrics",
+                    "port": "http",
+                    "scheme": "http",
+                }
+            ],
+        },
+    }
+    return [deployment, service, servicemonitor]
+
+
+def _render_rhaiis_distributed_raw_sglang_manifests(
+    plan: ResolvedRunPlan,
+) -> list[dict[str, Any]]:
+    runtime = plan.deployment.runtime
+    if runtime.replicas < 2:
+        raise ValidationError(
+            "rhaiis distributed raw-sglang requires runtime.replicas >= 2"
+        )
+    model_path = Path(_rhaiis_raw_vllm_model_path(plan))
+    if not model_path.is_absolute():
+        raise ValidationError("rhaiis raw-sglang options.model_path must be absolute")
+    if not any(
+        model_path == Path(item.mount_path)
+        or model_path.is_relative_to(Path(item.mount_path))
+        for item in runtime.host_paths
+    ):
+        raise ValidationError(
+            "rhaiis distributed raw-sglang options.model_path must be inside a runtime.host_paths mount"
+        )
+
+    distributed = plan.deployment.options.get("distributed") or {}
+    master_port = int(distributed.get("master_port", 20000))
+    launch_style = str(distributed.get("launch_style") or "sglang-nnodes")
+    if launch_style != "sglang-nnodes":
+        raise ValidationError(
+            "rhaiis distributed raw-sglang requires launch_style 'sglang-nnodes'"
+        )
+    head_start_delay_seconds = int(distributed.get("head_start_delay_seconds", 45))
+    workload_name = rhaiis_raw_sglang_deployment_name(plan)
+    headless_name = rhaiis_raw_sglang_headless_service_name(plan)
+    leader_host = (
+        f"{workload_name}-0.{headless_name}."
+        f"{plan.deployment.namespace}.svc.cluster.local"
+    )
+    labels = _rhaiis_raw_sglang_labels(plan)
+    selector_labels = _rhaiis_raw_sglang_selector_labels(plan)
+    metrics_target = {"benchflow.io/metrics-target": plan.deployment.release_name}
+
+    container_spec = _rhaiis_raw_sglang_container(plan)
+    container_env = list(container_spec.get("env") or [])
+    container_env.extend(
+        [
+            {
+                "name": "POD_NAME",
+                "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}},
+            },
+            {
+                "name": "POD_IP",
+                "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}},
+            },
+            {"name": "DP_LEADER_HOST", "value": leader_host},
+            {
+                "name": "HEAD_START_DELAY_SECONDS",
+                "value": str(head_start_delay_seconds),
+            },
+            {"name": "DIST_PORT", "value": str(master_port)},
+        ]
+    )
+    container_spec["env"] = container_env
+
+    host_network = bool(distributed.get("host_network", False))
+    socket_iface_preamble = ""
+    if host_network:
+        socket_iface_preamble = _rhaiis_host_network_socket_iface_preamble()
+
+    serve_argv = [
+        str(item)
+        for item in (
+            *(container_spec.pop("command") or []),
+            *(container_spec.pop("args") or []),
+        )
+    ]
+    base_argv = [*serve_argv, f"--nnodes={runtime.replicas}"]
+    launch_script = (
+        socket_iface_preamble
+        + 'export SGLANG_HOST_IP="${POD_IP}"\n'
+        'node_rank=${POD_NAME##*-}\n'
+        'if [ -z "${POD_IP}" ]; then\n'
+        '  echo "POD_IP is empty; cannot set --dist-init-addr" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        'if [ "${node_rank}" = "0" ]; then\n'
+        '  dist_init_addr="${POD_IP}"\n'
+        '  delay="${HEAD_START_DELAY_SECONDS:-0}"\n'
+        '  if [ "${delay}" -gt 0 ] 2>/dev/null; then\n'
+        '    echo "rank0 waiting ${delay}s so workers start first" >&2\n'
+        '    sleep "${delay}"\n'
+        "  fi\n"
+        '  exec "$@" --node-rank="${node_rank}" '
+        '--dist-init-addr="${dist_init_addr}:${DIST_PORT}"\n'
+        "fi\n"
+        'dist_init_addr=$(getent ahostsv4 "${DP_LEADER_HOST}" 2>/dev/null '
+        "| awk '{print $1; exit}')\n"
+        'if [ -z "${dist_init_addr}" ]; then\n'
+        '  dist_init_addr=$(getent hosts "${DP_LEADER_HOST}" 2>/dev/null '
+        "| awk '{print $1; exit}')\n"
+        "fi\n"
+        'if [ -z "${dist_init_addr}" ]; then\n'
+        '  echo "failed to resolve DP leader ${DP_LEADER_HOST}" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        'exec "$@" --node-rank="${node_rank}" '
+        '--dist-init-addr="${dist_init_addr}:${DIST_PORT}"\n'
+    )
+    container_spec["command"] = ["/bin/sh", "-c"]
+    container_spec["args"] = [
+        launch_script,
+        "benchflow-sglang",
+        *base_argv,
+    ]
+    container_spec["ports"].append(
+        {
+            "containerPort": master_port,
+            "name": "distributed",
+            "protocol": "TCP",
+        }
+    )
+    container_spec["readinessProbe"] = {
+        "exec": {
+            "command": [
+                "/bin/sh",
+                "-c",
+                (
+                    'node_rank=${POD_NAME##*-}; '
+                    'if [ "${node_rank}" != "0" ]; then kill -0 1; else '
+                    'python3 -c "import urllib.request; '
+                    "urllib.request.urlopen("
+                    f"'http://127.0.0.1:{RHAIIS_RAW_SGLANG_HTTP_PORT}/health', "
+                    'timeout=3)"; fi'
+                ),
+            ]
+        },
+        "initialDelaySeconds": 30,
+        "periodSeconds": 10,
+        "timeoutSeconds": 5,
+        "failureThreshold": 720,
+    }
+    pod_spec = _rhaiis_raw_vllm_pod_spec(plan, container_spec)
+    pod_spec["hostNetwork"] = bool(distributed.get("host_network", False))
+    pod_spec["hostIPC"] = bool(distributed.get("host_ipc", False))
+    if pod_spec["hostNetwork"]:
+        pod_spec["dnsPolicy"] = "ClusterFirstWithHostNet"
+
+    affinity = pod_spec.setdefault("affinity", {})
+    required_anti_affinity = affinity.setdefault("podAntiAffinity", {}).setdefault(
+        "requiredDuringSchedulingIgnoredDuringExecution", []
+    )
+    required_anti_affinity.append(
+        {
+            "labelSelector": {"matchLabels": selector_labels},
+            "topologyKey": "kubernetes.io/hostname",
+        }
+    )
+
+    statefulset = {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+            "name": workload_name,
+            "namespace": plan.deployment.namespace,
+            "labels": labels,
+        },
+        "spec": {
+            "serviceName": headless_name,
+            "podManagementPolicy": "Parallel",
+            "replicas": runtime.replicas,
+            "selector": {"matchLabels": selector_labels},
+            "template": {
+                "metadata": {"labels": {**labels, **selector_labels}},
+                "spec": pod_spec,
+            },
+        },
+    }
+    headless_service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": headless_name,
+            "namespace": plan.deployment.namespace,
+            "labels": {**labels, **metrics_target},
+        },
+        "spec": {
+            "clusterIP": "None",
+            "publishNotReadyAddresses": True,
+            "selector": selector_labels,
+            "ports": [
+                {
+                    "name": "http",
+                    "port": RHAIIS_RAW_SGLANG_HTTP_PORT,
+                    "protocol": "TCP",
+                    "targetPort": "http",
+                },
+                {
+                    "name": "distributed",
+                    "port": master_port,
+                    "protocol": "TCP",
+                    "targetPort": "distributed",
+                },
+            ],
+        },
+    }
+    api_service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": rhaiis_raw_sglang_service_name(plan),
+            "namespace": plan.deployment.namespace,
+            "labels": labels,
+        },
+        "spec": {
+            "type": "ExternalName",
+            "externalName": leader_host,
+            "ports": [
+                {
+                    "name": "http",
+                    "port": RHAIIS_RAW_SGLANG_HTTP_PORT,
+                    "protocol": "TCP",
+                    "targetPort": "http",
+                }
+            ],
+        },
+    }
+    servicemonitor = {
+        "apiVersion": "monitoring.coreos.com/v1",
+        "kind": "ServiceMonitor",
+        "metadata": {
+            "name": rhaiis_raw_sglang_servicemonitor_name(plan),
+            "namespace": plan.deployment.namespace,
+            "labels": labels,
+        },
+        "spec": {
+            "selector": {"matchLabels": metrics_target},
+            "namespaceSelector": {"matchNames": [plan.deployment.namespace]},
+            "endpoints": [
+                {
+                    "path": "/metrics",
+                    "port": "http",
+                    "scheme": "http",
+                    "relabelings": [
+                        {
+                            "sourceLabels": ["__meta_kubernetes_pod_name"],
+                            "regex": f"{workload_name}-0",
+                            "action": "keep",
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    return [statefulset, headless_service, api_service, servicemonitor]
+
+
+def render_rhaiis_raw_sglang_manifests(plan: ResolvedRunPlan) -> list[dict[str, Any]]:
+    if not plan.deployment.runtime.image:
+        raise ValidationError(
+            "rhaiis raw-sglang deployments require deployment.runtime.image"
+        )
+    if rhaiis_raw_sglang_is_distributed(plan):
+        return _render_rhaiis_distributed_raw_sglang_manifests(plan)
+    return _render_rhaiis_single_raw_sglang_manifests(plan)
+
+
+def rhaiis_raw_deployment_name(plan: ResolvedRunPlan) -> str:
+    if plan.deployment.mode == "raw-sglang":
+        return rhaiis_raw_sglang_deployment_name(plan)
+    return rhaiis_raw_vllm_deployment_name(plan)
+
+
+def rhaiis_raw_workload_kind(plan: ResolvedRunPlan) -> str:
+    if plan.deployment.mode == "raw-sglang":
+        return rhaiis_raw_sglang_workload_kind(plan)
+    return rhaiis_raw_vllm_workload_kind(plan)
+
+
+def rhaiis_raw_headless_service_name(plan: ResolvedRunPlan) -> str:
+    if plan.deployment.mode == "raw-sglang":
+        return rhaiis_raw_sglang_headless_service_name(plan)
+    return rhaiis_raw_vllm_headless_service_name(plan)
+
+
+def rhaiis_raw_service_name(plan: ResolvedRunPlan) -> str:
+    if plan.deployment.mode == "raw-sglang":
+        return rhaiis_raw_sglang_service_name(plan)
+    return rhaiis_raw_vllm_service_name(plan)
+
+
+def rhaiis_raw_servicemonitor_name(plan: ResolvedRunPlan) -> str:
+    if plan.deployment.mode == "raw-sglang":
+        return rhaiis_raw_sglang_servicemonitor_name(plan)
+    return rhaiis_raw_vllm_servicemonitor_name(plan)
+
+
+def rhaiis_raw_is_distributed(plan: ResolvedRunPlan) -> bool:
+    return rhaiis_raw_vllm_is_distributed(plan)
+
+
+def render_rhaiis_raw_manifests(plan: ResolvedRunPlan) -> list[dict[str, Any]]:
+    if plan.deployment.mode == "raw-sglang":
+        return render_rhaiis_raw_sglang_manifests(plan)
+    if plan.deployment.mode == "raw-vllm":
+        return render_rhaiis_raw_vllm_manifests(plan)
+    raise ValidationError(
+        f"unsupported RHAIIS deployment mode: {plan.deployment.mode}"
+    )
+
+
 def write_deployment_assets(
     plan: ResolvedRunPlan,
     output_dir: Path,
@@ -1473,7 +1925,7 @@ def write_deployment_assets(
                 yaml.safe_dump(pvc_manifest, sort_keys=False), encoding="utf-8"
             )
             written.append(target)
-        manifests = render_rhaiis_raw_vllm_manifests(plan)
+        manifests = render_rhaiis_raw_manifests(plan)
         for manifest in manifests:
             kind = str(manifest.get("kind") or "manifest").lower()
             manifest_name = str((manifest.get("metadata") or {}).get("name") or "")

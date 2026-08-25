@@ -5,17 +5,20 @@ import time
 from ..cluster import CommandError, require_any_command, run_command
 from ..models import ResolvedRunPlan, ValidationError
 from ..renderers.deployment import (
-    rhaiis_raw_vllm_deployment_name,
-    rhaiis_raw_vllm_headless_service_name,
-    rhaiis_raw_vllm_is_distributed,
-    rhaiis_raw_vllm_service_name,
-    rhaiis_raw_vllm_servicemonitor_name,
-    rhaiis_raw_vllm_workload_kind,
+    rhaiis_raw_deployment_name,
+    rhaiis_raw_headless_service_name,
+    rhaiis_raw_is_distributed,
+    rhaiis_raw_service_name,
+    rhaiis_raw_servicemonitor_name,
+    rhaiis_raw_workload_kind,
 )
 
 
+_RHAIIS_RAW_MODES = {"raw-vllm", "raw-sglang"}
+
+
 def _ensure_supported_mode(plan: ResolvedRunPlan) -> None:
-    if plan.deployment.mode != "raw-vllm":
+    if plan.deployment.mode not in _RHAIIS_RAW_MODES:
         raise ValidationError(
             f"unsupported RHAIIS deployment mode: {plan.deployment.mode}"
         )
@@ -52,13 +55,13 @@ def cleanup_rhaiis(
 
     kubectl_cmd = require_any_command("oc", "kubectl")
     namespace = plan.deployment.namespace
-    workload_name = rhaiis_raw_vllm_deployment_name(plan)
-    workload_kind = rhaiis_raw_vllm_workload_kind(plan)
-    service_name = rhaiis_raw_vllm_service_name(plan)
+    workload_name = rhaiis_raw_deployment_name(plan)
+    workload_kind = rhaiis_raw_workload_kind(plan)
+    service_name = rhaiis_raw_service_name(plan)
     service_names = [service_name]
-    if rhaiis_raw_vllm_is_distributed(plan):
-        service_names.append(rhaiis_raw_vllm_headless_service_name(plan))
-    servicemonitor_name = rhaiis_raw_vllm_servicemonitor_name(plan)
+    if rhaiis_raw_is_distributed(plan):
+        service_names.append(rhaiis_raw_headless_service_name(plan))
+    servicemonitor_name = rhaiis_raw_servicemonitor_name(plan)
 
     exists = run_command(
         [
