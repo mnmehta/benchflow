@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -128,10 +129,11 @@ def render_pipelinerun(
             "--target-kubeconfig only works with direct local BenchFlow commands"
         )
     run_plan_json = _serialized_run_plan(plan)
+    results_pvc = os.environ.get("BENCHFLOW_RESULTS_PVC", "benchmark-results").strip() or "benchmark-results"
     workspaces: list[dict[str, Any]] = [
         {
             "name": "results",
-            "persistentVolumeClaim": {"claimName": "benchmark-results"},
+            "persistentVolumeClaim": {"claimName": results_pvc},
         },
         {
             "name": "models-storage",
