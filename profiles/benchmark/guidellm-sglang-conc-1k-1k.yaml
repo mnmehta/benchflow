@@ -1,0 +1,47 @@
+# GuideLLM equivalent of the kimi-k3 SGLang concurrency client.
+#
+# Source of truth in kimi-k3:
+#   scripts/start-sglang-bench-remote.sh
+#   scripts/bench-concurrency-sweep.sh
+# Archived results (SGLang only ever ran 1000/1000):
+#   bench-results/sglang/conc-sweep-*-1000-1000*/
+#   reports/sglang-kimi-k3-1000-1000.qmd
+#
+# Client shape mirrored here:
+#   INPUT_LEN=1000 OUTPUT_LEN=1000
+#   CONCURRENCIES=1 2 4 8 16 32 64 128 256 512  (GuideLLM runs high→low)
+#   TARGET_SECS=120  →  max_duration 120s per stream
+#   --ignore-eos / request-rate inf  →  GuideLLM concurrent synthetic_text
+#
+# Server side (not this profile): sglang serve, port 30000, context-length 8192,
+# moe-runner-backend marlin, decode-attention-backend flashmla, etc.
+apiVersion: benchflow.io/v1alpha1
+kind: BenchmarkProfile
+metadata:
+  name: guidellm-sglang-conc-1k-1k
+spec:
+  guidellm:
+    backend:
+      kind: openai_http
+    profile:
+      kind: concurrent
+    override:
+      profile.streams: [512, 256, 128, 64, 32, 16, 8, 4, 2, 1]
+    data:
+      kind: synthetic_text
+      prompt_tokens: 1000
+      output_tokens: 1000
+    constraint:
+      # Matches TARGET_SECS=120 in start-sglang-bench-remote.sh /
+      # bench-concurrency-sweep.sh (~2 min of traffic per concurrency tier).
+      - kind: max_duration
+        seconds: 120
+    tokenizer:
+      kind: huggingface_auto
+      load_kwargs:
+        trust_remote_code: true
+  requirements:
+    # SGLang serve scripts default --context-length 8192.
+    min_max_model_len: 8192
+  env:
+    GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL: "DEBUG"

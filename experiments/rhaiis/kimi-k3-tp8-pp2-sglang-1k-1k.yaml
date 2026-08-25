@@ -1,0 +1,27 @@
+apiVersion: benchflow.io/v1alpha1
+kind: Experiment
+metadata:
+  name: kimi-k3-tp8-pp2-sglang-1k-1k
+spec:
+  model:
+    name:
+      - moonshotai/Kimi-K3
+  deployment_profile: rhaiis-kimi-k3-tp8-pp2-sglang
+  benchmark_profile: guidellm-sglang-conc-1k-1k
+  metrics_profile: detailed
+  namespace: benchflow
+  stages:
+    download: false
+    deploy: true
+    benchmark: true
+    collect: true
+    cleanup: true
+  mlflow:
+    tags:
+      accelerator: H200
+      topology: tp8-pp2
+      engine: sglang
+      moe_backend: marlin
+      workload: concurrent-1k-1k-pow2
+  execution:
+    timeout: 12h

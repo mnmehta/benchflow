@@ -1,0 +1,40 @@
+# GuideLLM 8000/1000 concurrency sweep in the same *client* shape as the
+# kimi-k3 SGLang harness (bench-concurrency-sweep.sh / start-sglang-bench-remote.sh).
+#
+# Note: kimi-k3 only archived SGLang conc-sweeps at 1000/1000
+# (bench-results/sglang/conc-sweep-*-1000-1000*). This is the 8k/1k counterpart
+# of guidellm-sglang-conc-1k-1k (same TARGET_SECS / ignore-eos style).
+#
+# Serve requirement: prompt+output ≈ 9000 tokens, so deployment context must be
+# ≥9000 (SGLang scripts default --context-length 8192 needs a bump).
+#
+# Streams match stock guidellm-concurrent-8k-1k (C≤64) rather than the 1k/1k
+# C≤512 ladder — long prompts can't sustain that concurrency.
+apiVersion: benchflow.io/v1alpha1
+kind: BenchmarkProfile
+metadata:
+  name: guidellm-sglang-conc-8k-1k
+spec:
+  guidellm:
+    backend:
+      kind: openai_http
+    profile:
+      kind: concurrent
+    override:
+      profile.streams: [64, 32, 16, 8, 4, 2, 1]
+    data:
+      kind: synthetic_text
+      prompt_tokens: 8000
+      output_tokens: 1000
+    constraint:
+      # Matches TARGET_SECS=120 in the SGLang / vllm-bench harness.
+      - kind: max_duration
+        seconds: 120
+    tokenizer:
+      kind: huggingface_auto
+      load_kwargs:
+        trust_remote_code: true
+  requirements:
+    min_max_model_len: 16384
+  env:
+    GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL: "DEBUG"
