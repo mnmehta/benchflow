@@ -1,0 +1,94 @@
+apiVersion: benchflow.io/v1alpha1
+kind: DeploymentProfile
+metadata:
+  name: rhaiis-kimi-k3-tp8-pp2-dp2-humming
+  annotations:
+    benchflow.io/description: >
+      Two replicas of the GuideLLM 1k/1k TP8×PP2 humming recipe
+      (rhaiis-kimi-k3-tp8-pp2-humming) via vLLM --data-parallel-size=2.
+      World size TP8×PP2×DP2 = 32 GPUs on all four H200 nodes. Each DP
+      replica is the same humming / 0.90 util / 256 seqs stack. Omits
+      --max-model-len so vLLM uses the model default (~1M), matching
+      the IX AgentX serve.
+spec:
+  platform: rhaiis
+  mode: raw-vllm
+  endpoint_path: /v1/models
+  runtime:
+    image: vllm/vllm-openai:kimi-k3
+    service_account_name: benchflow-hostpath-runtime
+    # One pod per node: 2 nodes per PP2 replica × 2 DP replicas.
+    replicas: 4
+    tensor_parallelism: 8
+    host_paths:
+      - name: kimi-k3-models
+        host_path: /mnt/local/kimi-k3/models
+        mount_path: /models
+        type: Directory
+        read_only: true
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values:
+                    - g13c364
+                    - gc37d78
+                    - gf2a612
+                    - g1191e4
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    resources:
+      requests:
+        cpu: "16"
+        memory: 64Gi
+        ephemeral-storage: 50Gi
+        rdma/ib: "1"
+      limits:
+        nvidia.com/gpu: "8"
+        rdma/ib: "1"
+    env:
+      HF_HOME: /models/hf
+      HF_HUB_CACHE: /models/hf/hub
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_CACHE: /models/hf/hub
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_ENGINE_READY_TIMEOUT_S: "7200"
+      VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: "1800"
+      VLLM_USE_RUST_FRONTEND: "0"
+      VLLM_USE_V2_MODEL_RUNNER: "1"
+      NCCL_CUMEM_ENABLE: "1"
+      NCCL_DMABUF_ENABLE: "0"
+      NCCL_IB_HCA: mlx5_5
+      NCCL_IB_GID_INDEX: "3"
+      PYTHONHASHSEED: "42"
+    vllm_args:
+      # Same 1k/1k humming knobs, plus DP=2 (do not enable EP — each replica
+      # is a full TP8×PP2 copy, not expert-sharded).
+      - --pipeline-parallel-size=2
+      - --data-parallel-size=2
+      - --gpu-memory-utilization=0.90
+      - --max-num-seqs=256
+      # Omit --max-model-len (model default ~1M), same as IX AgentX serve.
+      - --max-num-batched-tokens=4096
+      - --attention-backend=FLASHMLA
+      - --moe-backend=humming
+      - --disable-custom-all-reduce
+      - --trust-remote-code
+      - --enable-auto-tool-choice
+      - --tool-call-parser=kimi_k3
+      - --reasoning-parser=kimi_k3
+      - --enable-prompt-tokens-details
+  options:
+    model_path: /models/Kimi-K3
+    distributed:
+      enabled: true
+      launch_style: ix-agg
+      head_start_delay_seconds: 45
+      master_port: 29500
+      host_network: true
+      host_ipc: true
