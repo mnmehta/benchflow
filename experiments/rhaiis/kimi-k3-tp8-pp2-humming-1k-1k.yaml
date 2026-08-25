@@ -1,0 +1,26 @@
+apiVersion: benchflow.io/v1alpha1
+kind: Experiment
+metadata:
+  name: kimi-k3-tp8-pp2-humming-1k-1k
+spec:
+  model:
+    name:
+      - moonshotai/Kimi-K3
+  deployment_profile: rhaiis-kimi-k3-tp8-pp2-humming
+  benchmark_profile: guidellm-concurrent-1k-1k-pow2
+  metrics_profile: detailed
+  namespace: benchflow
+  stages:
+    download: false
+    deploy: true
+    benchmark: true
+    collect: true
+    cleanup: true
+  mlflow:
+    tags:
+      accelerator: H200
+      topology: tp8-pp2
+      moe_backend: humming
+      workload: concurrent-1k-1k-pow2
+  execution:
+    timeout: 12h

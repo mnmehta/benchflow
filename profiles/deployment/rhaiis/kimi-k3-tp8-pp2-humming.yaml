@@ -1,0 +1,98 @@
+apiVersion: benchflow.io/v1alpha1
+kind: DeploymentProfile
+metadata:
+  name: rhaiis-kimi-k3-tp8-pp2-humming
+  annotations:
+    benchflow.io/description: >
+      Match kimi-k3 recipe pp2-humming / published report
+      https://mnmehta.github.io/kimi-k3/pp2-marlin-vs-humming-1000-1000.html
+      (TP8×PP2, --moe-backend=humming, 16× H200).
+spec:
+  platform: rhaiis
+  mode: raw-vllm
+  endpoint_path: /v1/models
+  runtime:
+    # Same image as successful kimi-k3 / IX H200 bring-up.
+    image: vllm/vllm-openai:kimi-k3
+    service_account_name: benchflow-hostpath-runtime
+    # One PP stage per node (PP2 → 2 replicas × TP8).
+    replicas: 2
+    tensor_parallelism: 8
+    host_paths:
+      - name: kimi-k3-models
+        host_path: /mnt/local/kimi-k3/models
+        mount_path: /models
+        type: Directory
+        read_only: true
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values:
+                    # Same H200 pool as other kimi-k3 BenchFlow profiles;
+                    # anti-affinity places one pod per node.
+                    - g13c364
+                    - gc37d78
+                    - gf2a612
+                    - g1191e4
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    resources:
+      requests:
+        cpu: "16"
+        memory: 64Gi
+        ephemeral-storage: 50Gi
+        rdma/ib: "1"
+      limits:
+        nvidia.com/gpu: "8"
+        rdma/ib: "1"
+    env:
+      HF_HOME: /models/hf
+      HF_HUB_CACHE: /models/hf/hub
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_CACHE: /models/hf/hub
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_ENGINE_READY_TIMEOUT_S: "7200"
+      VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: "1800"
+      VLLM_USE_RUST_FRONTEND: "0"
+      VLLM_USE_V2_MODEL_RUNNER: "1"
+      # PP2 recipe (strategy-pp2): prefer default CUDA allocator (no expandable_segments).
+      # Omit PYTORCH_CUDA_ALLOC_CONF rather than setting expandable_segments:True.
+      NCCL_CUMEM_ENABLE: "1"
+      NCCL_DMABUF_ENABLE: "0"
+      NCCL_IB_HCA: mlx5_5
+      NCCL_IB_GID_INDEX: "3"
+      PYTHONHASHSEED: "42"
+    vllm_args:
+      # From archived non-default args on conc-sweep-pp2-humming-1000-1000.
+      # --nnodes/--node-rank/--master-addr come from launch_style: ix-agg.
+      - --pipeline-parallel-size=2
+      - --gpu-memory-utilization=0.90
+      - --max-num-seqs=256
+      - --max-model-len=8192
+      - --max-num-batched-tokens=4096
+      - --attention-backend=FLASHMLA
+      - --moe-backend=humming
+      - --disable-custom-all-reduce
+      - --trust-remote-code
+      - --enable-auto-tool-choice
+      - --tool-call-parser=kimi_k3
+      - --reasoning-parser=kimi_k3
+      # Humming on this image needs MoEActivation.SITU allowlisted
+      # (vLLM PR #50510). BenchFlow injects the allowlist patch into the
+      # distributed launch preamble when --moe-backend=humming is set.
+  options:
+    model_path: /models/Kimi-K3
+    distributed:
+      enabled: true
+      # Same IX / kimi-k3 multi-node launch as TP+PP (nnodes + headless workers).
+      launch_style: ix-agg
+      head_start_delay_seconds: 45
+      master_port: 29500
+      host_network: true
+      host_ipc: true

@@ -162,6 +162,28 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         self.assertEqual(relabeling["action"], "keep")
         self.assertEqual(relabeling["regex"], f"{workload_name}-0")
 
+    def test_humming_profile_injects_situ_allowlist_patch(self) -> None:
+        experiment = load_experiment(
+            REPO_ROOT / "experiments/rhaiis/kimi-k3-tp8-pp2-humming-1k-1k.yaml"
+        )
+        plan = resolve_experiment_matrix(
+            experiment, ProfileCatalog.load(REPO_ROOT / "profiles")
+        )[0]
+        self.assertIn("--moe-backend=humming", plan.deployment.runtime.vllm_args)
+        self.assertEqual(plan.deployment.runtime.replicas, 2)
+
+        manifests = render_rhaiis_raw_vllm_manifests(plan)
+        statefulset = next(m for m in manifests if m["kind"] == "StatefulSet")
+        script = statefulset["spec"]["template"]["spec"]["containers"][0]["args"][0]
+        self.assertIn("applying humming MoEActivation.SITU allowlist patch", script)
+        self.assertIn("MoEActivation.SITU", script)
+        self.assertIn("fused_humming_moe.py", script)
+        self.assertIn("applying mamba_hybrid PR #50327", script)
+        self.assertIn("_fill_num_accepted_kernel", script)
+        self.assertIn("--moe-backend=humming", " ".join(
+            str(a) for a in statefulset["spec"]["template"]["spec"]["containers"][0]["args"]
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()
