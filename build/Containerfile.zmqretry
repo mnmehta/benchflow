@@ -1,0 +1,3 @@
+# Overlay: inject renderer ZMQ retry + worker TCPStore readiness onto mamba600.
+FROM quay.io/mimehta/benchflow:cks-kimi-mamba600
+COPY src/benchflow/renderers/deployment.py /opt/app-root/lib64/python3.13/site-packages/benchflow/renderers/deployment.py

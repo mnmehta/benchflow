@@ -115,6 +115,9 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         self.assertIn("/sys/class/net", script)
         self.assertIn("applying mamba_hybrid PR #50327", script)
         self.assertIn("_fill_num_accepted_kernel", script)
+        self.assertIn("applying shm_broadcast ZMQ bind retry on EADDRINUSE", script)
+        self.assertIn("Kimi-K3 harness: retry ZMQ bind", script)
+        self.assertIn("shm_broadcast.py", script)
         joined = " ".join(str(a) for a in container["args"])
         self.assertIn("vllm", container["args"])
         self.assertIn("serve", container["args"])
@@ -135,6 +138,7 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         )
         self.assertIn(workload_name + "-0.", env_by_name["DP_LEADER_HOST"]["value"])
         self.assertEqual(env_by_name["HEAD_START_DELAY_SECONDS"]["value"], "45")
+        self.assertEqual(env_by_name["VLLM_MASTER_PORT"]["value"], "29500")
         self.assertEqual(env_by_name["VLLM_ENGINE_READY_TIMEOUT_S"]["value"], "7200")
         self.assertNotIn(
             "model-storage", {volume["name"] for volume in pod_spec["volumes"]}
@@ -144,7 +148,13 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         readiness = container["readinessProbe"]["exec"]["command"][-1]
         self.assertIn("${POD_NAME##*-}", readiness)
         self.assertNotIn("${HOSTNAME##*-}", readiness)
+        self.assertNotIn("kill -0 1", readiness)
+        self.assertIn("/proc/net/tcp", readiness)
+        self.assertIn("vllm-tcpstore-joined", readiness)
         self.assertEqual(container["readinessProbe"]["failureThreshold"], 720)
+        liveness = container["livenessProbe"]["exec"]["command"][-1]
+        self.assertIn("vllm-tcpstore-joined", liveness)
+        self.assertEqual(container["livenessProbe"]["failureThreshold"], 20)
 
         headless = by_kind_name[("Service", headless_name)]
         self.assertEqual(headless["spec"]["clusterIP"], "None")
@@ -180,6 +190,8 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         self.assertIn("fused_humming_moe.py", script)
         self.assertIn("applying mamba_hybrid PR #50327", script)
         self.assertIn("_fill_num_accepted_kernel", script)
+        self.assertIn("applying shm_broadcast ZMQ bind retry on EADDRINUSE", script)
+        self.assertIn("Kimi-K3 harness: retry ZMQ bind", script)
         self.assertIn("--moe-backend=humming", " ".join(
             str(a) for a in statefulset["spec"]["template"]["spec"]["containers"][0]["args"]
         ))

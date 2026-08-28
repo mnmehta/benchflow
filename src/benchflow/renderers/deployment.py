@@ -953,6 +953,139 @@ PY
 '''
 
 
+def _rhaiis_zmq_bind_retry_preamble() -> str:
+    """In-pod retry for ZMQ ``get_open_port()`` TOCTOU under hostNetwork.
+
+    Same patch as the Kimi-K3 / InferenceX recipe
+    (``scripts/run-vllm-kimi-k3-recipe.sh``): many TP workers pick the same
+    free port then ``bind`` fails with ``EADDRINUSE``. Retry up to 64 times.
+    """
+    return r'''echo "applying shm_broadcast ZMQ bind retry on EADDRINUSE" >&2
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path(
+    "/usr/local/lib/python3.12/dist-packages/vllm/distributed/"
+    "device_communicators/shm_broadcast.py"
+)
+if not path.is_file():
+    print(f"shm_broadcast.py not found ({path}); skipping")
+    raise SystemExit(0)
+src = path.read_text()
+if "Kimi-K3 harness: retry ZMQ bind" in src:
+    print("already patched (ZMQ bind retry present)")
+    raise SystemExit(0)
+needle = """            remote_subscribe_port = get_open_port()
+            if is_valid_ipv6_address(connect_ip):
+                self.remote_socket.setsockopt(IPV6, 1)
+                remote_addr_ipv6 = True
+                connect_ip = f"[{connect_ip}]"
+            socket_addr = f"tcp://{connect_ip}:{remote_subscribe_port}"
+            self.remote_socket.bind(socket_addr)
+            remote_subscribe_addr = f"tcp://{connect_ip}:{remote_subscribe_port}"
+"""
+patch = """            # Kimi-K3 harness: retry ZMQ bind on EADDRINUSE (get_open_port TOCTOU).
+            _mq_connect_ip = connect_ip
+            if is_valid_ipv6_address(_mq_connect_ip):
+                self.remote_socket.setsockopt(IPV6, 1)
+                remote_addr_ipv6 = True
+                _mq_connect_ip = f"[{_mq_connect_ip}]"
+            last_err = None
+            for _attempt in range(64):
+                remote_subscribe_port = get_open_port()
+                socket_addr = f"tcp://{_mq_connect_ip}:{remote_subscribe_port}"
+                try:
+                    self.remote_socket.bind(socket_addr)
+                    last_err = None
+                    break
+                except zmq.ZMQError as e:
+                    last_err = e
+                    if getattr(e, "errno", None) != zmq.EADDRINUSE:
+                        raise
+            if last_err is not None:
+                raise last_err
+            connect_ip = _mq_connect_ip
+            remote_subscribe_addr = f"tcp://{connect_ip}:{remote_subscribe_port}"
+"""
+if needle not in src:
+    raise SystemExit(f"zmq bind patch needle missing in {path}")
+bak = path.with_suffix(path.suffix + ".bak-pre-zmq-retry")
+if not bak.exists():
+    bak.write_text(src)
+path.write_text(src.replace(needle, patch, 1))
+cache = path.parent / "__pycache__"
+if cache.is_dir():
+    for pyc in cache.glob("shm_broadcast*.pyc"):
+        pyc.unlink(missing_ok=True)
+print(f"patched {path} (ZMQ bind retry on EADDRINUSE)")
+PY
+'''
+
+
+def _rhaiis_vllm_worker_tcpstore_check_cmd() -> str:
+    """Fail unless this worker still has an ESTABLISHED TCPStore/Gloo socket.
+
+    Hung headless workers keep PID 1 alive after the leader store is gone
+    (NCCL HeartbeatMonitor Broken pipe). ``kill -0 1`` reports Ready; this
+    does not. PyTorch TCPStore is typically ``master_port`` or ``master_port+1``.
+    On success, drop a marker so liveness can restart workers that later hang.
+    """
+    return r'''python3 -c 'import os, sys
+from pathlib import Path
+mp = int(os.environ.get("VLLM_MASTER_PORT", "29500"))
+ports = {mp, mp + 1}
+ok = False
+for f in ("/proc/net/tcp", "/proc/net/tcp6"):
+    p = Path(f)
+    if not p.is_file():
+        continue
+    for line in p.read_text().splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 4 or parts[3] != "01":
+            continue
+        if int(parts[2].rsplit(":", 1)[-1], 16) in ports:
+            ok = True
+            break
+    if ok:
+        break
+if ok:
+    Path("/tmp/vllm-tcpstore-joined").write_text("1")
+    raise SystemExit(0)
+raise SystemExit(1)'
+'''
+
+
+def _rhaiis_vllm_distributed_readiness_command() -> str:
+    return (
+        'node_rank=${POD_NAME##*-}\n'
+        'if [ "${node_rank}" = "0" ]; then\n'
+        '  python3 -c "import urllib.request; '
+        "urllib.request.urlopen('http://127.0.0.1:8000/health', "
+        'timeout=3)"\n'
+        "else\n"
+        f"  {_rhaiis_vllm_worker_tcpstore_check_cmd().rstrip()}\n"
+        "fi\n"
+    )
+
+
+def _rhaiis_vllm_distributed_liveness_command() -> str:
+    """Kill hung workers once they have joined, without racing first TCPStore.
+
+    Rank 0: process-alive only (HTTP would SIGKILL during the long weight load).
+    Workers: after readiness has seen TCPStore, require it to stay ESTABLISHED.
+    """
+    return (
+        'node_rank=${POD_NAME##*-}\n'
+        'if [ "${node_rank}" = "0" ]; then\n'
+        "  kill -0 1\n"
+        'elif [ -f /tmp/vllm-tcpstore-joined ]; then\n'
+        f"  {_rhaiis_vllm_worker_tcpstore_check_cmd().rstrip()}\n"
+        "else\n"
+        "  kill -0 1\n"
+        "fi\n"
+    )
+
+
 def _rhaiis_host_network_socket_iface_preamble() -> str:
     return (
         'if [ -z "${GLOO_SOCKET_IFNAME:-}" ] || '
@@ -1120,6 +1253,7 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
                 "name": "HEAD_START_DELAY_SECONDS",
                 "value": str(head_start_delay_seconds),
             },
+            {"name": "VLLM_MASTER_PORT", "value": str(master_port)},
         ]
     )
     container_spec["env"] = container_env
@@ -1138,9 +1272,14 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
     # Always attempt on distributed Kimi launches: PP/DP hybrid paths hit the
     # int32 idx_mapping bug; no-op when the image already has PR #50327.
     mamba_preamble = _rhaiis_mamba_hybrid_preamble()
+    # hostNetwork + many TP workers: get_open_port() TOCTOU → ZMQ EADDRINUSE.
+    zmq_preamble = _rhaiis_zmq_bind_retry_preamble()
 
     launch_preamble = (
-        socket_iface_preamble + humming_situ_preamble + mamba_preamble
+        socket_iface_preamble
+        + humming_situ_preamble
+        + mamba_preamble
+        + zmq_preamble
     )
 
     if launch_style == "ix-agg":
@@ -1241,26 +1380,34 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
             "protocol": "TCP",
         }
     )
-    # Kimi weight load is many minutes; keep workers "ready" via process liveness
-    # and give rank0 a long HTTP readiness budget (matches IX health polls).
+    # Rank 0: HTTP /health with a long budget (Kimi weight load is many minutes).
+    # Workers: ESTABLISHED TCPStore/Gloo to master_port — do not treat a hung
+    # headless PID 1 as Ready. Liveness restarts workers that join then hang.
     container_spec["readinessProbe"] = {
         "exec": {
             "command": [
                 "/bin/sh",
                 "-c",
-                (
-                    'node_rank=${POD_NAME##*-}; '
-                    'if [ "${node_rank}" != "0" ]; then kill -0 1; else '
-                    'python3 -c "import urllib.request; '
-                    "urllib.request.urlopen('http://127.0.0.1:8000/health', "
-                    'timeout=3)"; fi'
-                ),
+                _rhaiis_vllm_distributed_readiness_command(),
             ]
         },
         "initialDelaySeconds": 30,
         "periodSeconds": 10,
         "timeoutSeconds": 5,
         "failureThreshold": 720,
+    }
+    container_spec["livenessProbe"] = {
+        "exec": {
+            "command": [
+                "/bin/sh",
+                "-c",
+                _rhaiis_vllm_distributed_liveness_command(),
+            ]
+        },
+        "initialDelaySeconds": 90,
+        "periodSeconds": 30,
+        "timeoutSeconds": 5,
+        "failureThreshold": 20,
     }
     pod_spec = _rhaiis_raw_vllm_pod_spec(plan, container_spec)
     pod_spec["hostNetwork"] = bool(distributed.get("host_network", False))
