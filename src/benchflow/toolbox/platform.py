@@ -299,7 +299,7 @@ def deploy_platform(
     context: ExecutionContext | None = None,
     skip_if_exists: bool = True,
     verify: bool = True,
-    verify_timeout_seconds: int = 1800,
+    verify_timeout_seconds: int = 7200,
 ) -> Path:
     workspace_dir = context.workspace_dir if context is not None else None
     manifests_dir = context.manifests_dir if context is not None else None

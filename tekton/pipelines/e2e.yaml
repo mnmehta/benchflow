@@ -96,6 +96,7 @@ spec:
 
     - name: deploy
       runAfter: [download-model]
+      timeout: "2h"
       when:
         - input: "$(tasks.resolve-run-plan.results.stage-deploy)"
           operator: in

@@ -49,3 +49,5 @@ spec:
         - $(workspaces.manifests-storage.path)
         - --execution-name
         - $(params.PIPELINE_RUN_NAME)
+        - --verify-timeout-seconds
+        - "7200"
