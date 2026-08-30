@@ -1,0 +1,40 @@
+apiVersion: benchflow.io/v1alpha1
+kind: BenchmarkProfile
+metadata:
+  name: aiperf-agentx-ix-h200-c40
+spec:
+  tool: aiperf
+  env:
+    AIPERF_HTTP_SSL_VERIFY: "false"
+  # Match IX H200 AgentX serve: omit --max-model-len (model default ~1M).
+  # Do NOT set requirements.min_max_model_len — BenchFlow would inject 131072.
+  aiperf:
+    # Source: kimi-k3 scripts/run-ix-agentx-inpod.sh +
+    # bench-results/ix-h200-tp8dp4ep32-vllm-balanced-agentx-c1 CLI.
+    scenario: inferencex-agentx-mvp
+    # Same Weka corpus as IX --public-dataset semianalysis_cc_traces_weka_062126;
+    # AgentX MVP scenario expects the weka_hf alias + pinned HF id.
+    public_dataset: weka_hf
+    hf_weka_dataset: semianalysisai/cc-traces-weka-062126
+    endpoint_type: chat
+    endpoint_path: /v1/chat/completions
+    streaming: true
+    use_server_token_count: true
+    no_gpu_telemetry: true
+    tokenizer_trust_remote_code: true
+    ui: simple
+    # IX load / sampling knobs
+    concurrency: 40
+    benchmark_duration: 3600
+    stats_interval: 30
+    random_seed: 42
+    failed_request_threshold: 0.1
+    trajectory_start_min_ratio: 0.25
+    trajectory_start_max_ratio: 0.75
+    warmup_request_count: 400  # IX --warmup-requests-per-lane 10 × C=40
+    warmup_grace_period: 1800
+    # omit trace_idle_gap_cap_seconds: BenchFlow aiperf AgentX scenario forbids it
+    num_dataset_entries: 393
+    slice_duration: 1.0
+    # Warmup + 1h measure + slack (BenchFlow process timeout, not AIPerf)
+    max_seconds: 10800
