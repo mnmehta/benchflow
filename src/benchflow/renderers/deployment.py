@@ -1069,21 +1069,15 @@ def _rhaiis_vllm_distributed_readiness_command() -> str:
 
 
 def _rhaiis_vllm_distributed_liveness_command() -> str:
-    """Kill hung workers once they have joined, without racing first TCPStore.
+    """Process-alive only. Do not SIGKILL on TCPStore.
 
-    Rank 0: process-alive only (HTTP would SIGKILL during the long weight load).
-    Workers: after readiness has seen TCPStore, require it to stay ESTABLISHED.
+    TCPStore membership belongs on *readiness* (hung workers stay Unready).
+    Using the same check for liveness SIGKILLed PP workers after a transient
+    store blip under AgentX load; the bounce loop then deleted the PipelineRun
+    (~1h45m into C=40) as a fake deploy timeout. Rank 0 already used kill -0
+    so HTTP would not SIGKILL during weight load.
     """
-    return (
-        'node_rank=${POD_NAME##*-}\n'
-        'if [ "${node_rank}" = "0" ]; then\n'
-        "  kill -0 1\n"
-        'elif [ -f /tmp/vllm-tcpstore-joined ]; then\n'
-        f"  {_rhaiis_vllm_worker_tcpstore_check_cmd().rstrip()}\n"
-        "else\n"
-        "  kill -0 1\n"
-        "fi\n"
-    )
+    return "kill -0 1\n"
 
 
 def _rhaiis_host_network_socket_iface_preamble() -> str:
@@ -1382,7 +1376,8 @@ def _render_rhaiis_distributed_raw_vllm_manifests(
     )
     # Rank 0: HTTP /health with a long budget (Kimi weight load is many minutes).
     # Workers: ESTABLISHED TCPStore/Gloo to master_port — do not treat a hung
-    # headless PID 1 as Ready. Liveness restarts workers that join then hang.
+    # headless PID 1 as Ready. Liveness is process-alive only (see
+    # _rhaiis_vllm_distributed_liveness_command).
     container_spec["readinessProbe"] = {
         "exec": {
             "command": [

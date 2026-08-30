@@ -153,7 +153,8 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
         self.assertIn("vllm-tcpstore-joined", readiness)
         self.assertEqual(container["readinessProbe"]["failureThreshold"], 720)
         liveness = container["livenessProbe"]["exec"]["command"][-1]
-        self.assertIn("vllm-tcpstore-joined", liveness)
+        self.assertIn("kill -0 1", liveness)
+        self.assertNotIn("vllm-tcpstore-joined", liveness)
         self.assertEqual(container["livenessProbe"]["failureThreshold"], 20)
 
         headless = by_kind_name[("Service", headless_name)]
