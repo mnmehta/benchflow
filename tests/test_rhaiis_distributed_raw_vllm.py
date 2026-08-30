@@ -197,6 +197,41 @@ class RhaiisDistributedRawVllmTest(unittest.TestCase):
             str(a) for a in statefulset["spec"]["template"]["spec"]["containers"][0]["args"]
         ))
 
+    def test_ix_cpu_offload_profile_passes_simple_cpu_connector(self) -> None:
+        experiment = load_experiment(
+            REPO_ROOT
+            / "experiments/rhaiis/kimi-k3-tp8-pp2-dp2-humming-ix-agentx-kv-offload.yaml"
+        )
+        plan = resolve_experiment_matrix(
+            experiment, ProfileCatalog.load(REPO_ROOT / "profiles")
+        )[0]
+        self.assertEqual(
+            plan.deployment.runtime.env.get("KV_TRANSFER_CONFIG"),
+            (
+                '{"kv_connector":"SimpleCPUOffloadConnector","kv_role":"kv_both",'
+                '"kv_connector_extra_config":{"cpu_bytes_to_use_per_rank":154250000000,'
+                '"lazy_offload":false}}'
+            ),
+        )
+        joined = " ".join(plan.deployment.runtime.vllm_args)
+        self.assertIn("SimpleCPUOffloadConnector", joined)
+        self.assertIn("cpu_bytes_to_use_per_rank", joined)
+        self.assertIn("--enable-prefix-caching", plan.deployment.runtime.vllm_args)
+
+        manifests = render_rhaiis_raw_vllm_manifests(plan)
+        statefulset = next(m for m in manifests if m["kind"] == "StatefulSet")
+        container = statefulset["spec"]["template"]["spec"]["containers"][0]
+        env = {
+            item["name"]: item["value"]
+            for item in container["env"]
+            if "value" in item
+        }
+        self.assertIn("SimpleCPUOffloadConnector", env["KV_TRANSFER_CONFIG"])
+        self.assertIn(
+            "SimpleCPUOffloadConnector",
+            " ".join(str(a) for a in container["args"]),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
