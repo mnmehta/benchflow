@@ -1,0 +1,29 @@
+apiVersion: benchflow.io/v1alpha1
+kind: Experiment
+metadata:
+  name: kimi-k3-tp8-pp2-dp2-humming-ix-agentx-kv-offload
+spec:
+  model:
+    name:
+      - moonshotai/Kimi-K3
+  deployment_profile: rhaiis-kimi-k3-tp8-pp2-dp2-humming-ix-cpu-offload
+  # C=1 template. Sequential C=N uses generated experiments with
+  # aiperf-agentx-ix-h200-c{N} (full redeploy per concurrency).
+  benchmark_profile: aiperf-agentx-ix-h200-c1
+  metrics_profile: detailed
+  namespace: benchflow
+  stages:
+    download: false
+    deploy: true
+    benchmark: true
+    collect: true
+    cleanup: true
+  mlflow:
+    tags:
+      accelerator: H200
+      topology: tp8-pp2-dp2
+      moe_backend: humming
+      workload: ix-agentx
+      kv_offload: SimpleCPUOffloadConnector
+  execution:
+    timeout: 24h
