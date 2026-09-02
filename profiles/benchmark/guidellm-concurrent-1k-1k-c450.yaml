@@ -1,0 +1,30 @@
+# GuideLLM 1000/1000 concurrency sweep for Kimi TP8×PP2 humming.
+# Next run after AgentX C=30: 450s per stream (vllm-bench TARGET_SECS was 120;
+# the previous BenchFlow pow2 profile used 600s) and a 50-step ladder to 500.
+apiVersion: benchflow.io/v1alpha1
+kind: BenchmarkProfile
+metadata:
+  name: guidellm-concurrent-1k-1k-c450
+spec:
+  guidellm:
+    backend:
+      kind: openai_http
+    profile:
+      kind: concurrent
+    override:
+      # GuideLLM walks this list in order (low→high).
+      profile.streams: [1, 50, 100, 150, 200, 300, 400, 500]
+    data:
+      kind: synthetic_text
+      prompt_tokens: 1000
+      output_tokens: 1000
+    constraint:
+      # Per stream (not whole sweep).
+      - kind: max_duration
+        seconds: 450
+    tokenizer:
+      kind: huggingface_auto
+      load_kwargs:
+        trust_remote_code: true
+  env:
+    GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL: "DEBUG"

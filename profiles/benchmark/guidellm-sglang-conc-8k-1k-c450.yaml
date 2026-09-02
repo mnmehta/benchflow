@@ -1,0 +1,31 @@
+# GuideLLM 8000/1000 SGLang, same client shape as guidellm-sglang-conc-1k-1k-c450
+# (450s/stream, ascending 1…500). Requires context ≥9000
+# (rhaiis-kimi-k3-tp8-pp2-sglang-8k uses --context-length=16384).
+apiVersion: benchflow.io/v1alpha1
+kind: BenchmarkProfile
+metadata:
+  name: guidellm-sglang-conc-8k-1k-c450
+spec:
+  guidellm:
+    backend:
+      kind: openai_http
+    profile:
+      kind: concurrent
+    override:
+      # GuideLLM walks this list in order (low→high).
+      profile.streams: [1, 50, 100, 150, 200, 300, 400, 500]
+    data:
+      kind: synthetic_text
+      prompt_tokens: 8000
+      output_tokens: 1000
+    constraint:
+      - kind: max_duration
+        seconds: 450
+    tokenizer:
+      kind: huggingface_auto
+      load_kwargs:
+        trust_remote_code: true
+  requirements:
+    min_max_model_len: 16384
+  env:
+    GUIDELLM__LOGGING__CONSOLE_LOG_LEVEL: "DEBUG"
