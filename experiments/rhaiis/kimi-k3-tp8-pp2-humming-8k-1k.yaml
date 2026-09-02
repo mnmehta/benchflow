@@ -7,7 +7,7 @@ spec:
     name:
       - moonshotai/Kimi-K3
   deployment_profile: rhaiis-kimi-k3-tp8-pp2-humming-8k
-  benchmark_profile: guidellm-concurrent-8k-1k-pow2
+  benchmark_profile: guidellm-concurrent-8k-1k-c450
   metrics_profile: detailed
   namespace: benchflow
   stages:
@@ -21,6 +21,6 @@ spec:
       accelerator: H200
       topology: tp8-pp2
       moe_backend: humming
-      workload: concurrent-8k-1k-pow2
+      workload: concurrent-8k-1k-c450
   execution:
     timeout: 12h

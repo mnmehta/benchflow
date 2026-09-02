@@ -7,7 +7,7 @@ spec:
     name:
       - moonshotai/Kimi-K3
   deployment_profile: rhaiis-kimi-k3-tp8-pp2-sglang-8k
-  benchmark_profile: guidellm-sglang-conc-8k-1k
+  benchmark_profile: guidellm-sglang-conc-8k-1k-c450
   metrics_profile: detailed
   namespace: benchflow
   stages:
@@ -22,6 +22,6 @@ spec:
       topology: tp8-pp2
       engine: sglang
       moe_backend: marlin
-      workload: concurrent-8k-1k-pow2
+      workload: concurrent-8k-1k-c450
   execution:
     timeout: 12h
