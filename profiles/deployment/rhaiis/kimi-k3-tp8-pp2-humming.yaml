@@ -32,12 +32,10 @@ spec:
                 - key: kubernetes.io/hostname
                   operator: In
                   values:
-                    # Same H200 pool as other kimi-k3 BenchFlow profiles;
-                    # anti-affinity places one pod per node.
-                    - g13c364
+                    # 1k-1k humming pair. SGLang 1k-1k takes g13c364 + g1191e4
+                    # so both TP8×PP2 jobs can run at once (2 nodes each).
                     - gc37d78
                     - gf2a612
-                    - g1191e4
     tolerations:
       - key: nvidia.com/gpu
         operator: Exists

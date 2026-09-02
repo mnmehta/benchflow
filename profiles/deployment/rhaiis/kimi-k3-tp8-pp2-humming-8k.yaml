@@ -5,8 +5,8 @@ metadata:
   annotations:
     benchflow.io/description: >
       TP8×PP2 humming for 8k/1k GuideLLM (max-model-len raised past 8k+1k).
-      Node pool pinned to the two H200s left free while the 1k-1k PP2 run
-      occupies g13c364 + g1191e4.
+      Node pool pinned to gc37d78 + gf2a612 so 8k SGLang can occupy
+      g13c364 + g1191e4 at the same time (2 nodes each).
 spec:
   platform: rhaiis
   mode: raw-vllm
@@ -30,7 +30,7 @@ spec:
                 - key: kubernetes.io/hostname
                   operator: In
                   values:
-                    # Free while 1k-1k holds g13c364 + g1191e4.
+                    # Same pair as 1k-1k humming. 8k SGLang uses the other two.
                     - gc37d78
                     - gf2a612
     tolerations:

@@ -5,8 +5,8 @@ metadata:
   annotations:
     benchflow.io/description: >
       TP8×PP2 SGLang for 8k/1k GuideLLM (context-length raised past 8k+1k).
-      Node pool pinned to the two H200s left free while the 1k-1k SGLang run
-      occupies g13c364 + g1191e4.
+      Node pool pinned to g13c364 + g1191e4 so 8k humming can occupy
+      gc37d78 + gf2a612 at the same time (2 nodes each).
 spec:
   platform: rhaiis
   mode: raw-sglang
@@ -30,9 +30,9 @@ spec:
                 - key: kubernetes.io/hostname
                   operator: In
                   values:
-                    # Free while 1k-1k holds g13c364 + g1191e4.
-                    - gc37d78
-                    - gf2a612
+                    # Same pair as 1k-1k SGLang. 8k humming uses the other two.
+                    - g13c364
+                    - g1191e4
     tolerations:
       - key: nvidia.com/gpu
         operator: Exists
