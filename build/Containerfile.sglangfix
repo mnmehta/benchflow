@@ -1,0 +1,7 @@
+# Overlay: raw-sglang deploy onto livekill0. Renderer is current; models/loaders
+# must know sglang_args or deploy crashes with AttributeError.
+FROM quay.io/mimehta/benchflow:cks-kimi-livekill0
+COPY src/benchflow/deploy/rhaiis.py /opt/app-root/lib64/python3.13/site-packages/benchflow/deploy/rhaiis.py
+COPY src/benchflow/cleanup/rhaiis.py /opt/app-root/lib64/python3.13/site-packages/benchflow/cleanup/rhaiis.py
+COPY src/benchflow/models.py /opt/app-root/lib64/python3.13/site-packages/benchflow/models.py
+COPY src/benchflow/loaders.py /opt/app-root/lib64/python3.13/site-packages/benchflow/loaders.py
